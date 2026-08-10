@@ -34,21 +34,84 @@ function el(tag, props, kids) {
   if (kids != null) for (const c of [].concat(kids)) e.append(c && c.nodeType ? c : document.createTextNode(c));
   return e;
 }
-function button(label, onclick, cls) { const b = el('button', cls ? { class: cls } : null, [label]); b.addEventListener('click', onclick); return b; }
+const withTip = (elm, text) => { if (text) elm.setAttribute('data-tip', text); return elm; };
+function button(label, onclick, cls, tip) { const b = el('button', cls ? { class: cls } : null, [label]); b.addEventListener('click', onclick); return withTip(b, tip); }
 function select(options, value, onchange) {
   const s = el('select');
   for (const [v, label] of options) { const o = el('option', { value: v }, [label]); if (v === value) o.selected = true; s.append(o); }
   s.addEventListener('change', () => onchange(s.value));
   return s;
 }
-function slider(label, min, max, stp, get, set, fmt) {
+function slider(label, min, max, stp, get, set, fmt, tip) {
   const inp = el('input', { type: 'range', min, max, step: stp });
   inp.value = get();
   const out = el('output', {}, [fmt(get())]);
   inp.addEventListener('input', () => { const v = parseFloat(inp.value); set(v); out.textContent = fmt(v); });
-  return el('div', { class: 'ctrl' }, [el('label', {}, [label]), inp, out]);
+  return withTip(el('div', { class: 'ctrl' }, [el('label', {}, [label]), inp, out]), tip);
+}
+function ctrlSelect(label, options, value, onchange, tip) {
+  return withTip(el('div', { class: 'ctrl' }, [el('label', {}, [label]), select(options, value, onchange), el('span')]), tip);
 }
 const f2 = (v) => (Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
+
+// Plain-language help for every control/term — shown as a hover tooltip so new
+// users know what each knob does. "Crowding" = the kernel-weighted neighbor count.
+const HELP = {
+  rScale: 'Perception range. This cell senses neighbors out to R × rScale — bigger means it sees more of its surroundings (but sensing far costs offspring via kSense).',
+  sLo: 'Survival lower bound. If local crowding drops below this, the cell dies of loneliness (the Allee effect). Raise it and isolated cells and expansion fronts die back.',
+  sHi: 'Survival upper bound. If local crowding rises above this, the cell dies of overcrowding. Lower it and cells can only persist in thin, sparse structures.',
+  bLo: 'Birth lower bound. The cell only reproduces when local crowding is at least this — it needs some company to breed.',
+  bHi: 'Birth upper bound. The cell stops reproducing above this crowding, so the birth window is [bLo, bHi].',
+  fecundity: 'Base chance per tick of emitting one offspring while inside the birth band (before metabolic cost is subtracted).',
+  dDisp: 'Dispersal distance: how far, on average, offspring are placed from the parent. Short = children reinforce local structure; long = they colonise gaps.',
+  dCV: 'Dispersal variability (coefficient of variation). 0 = every child lands at the same distance; higher = a wide spread of distances.',
+  step: 'Motility: how far the cell random-walks each tick. Costs offspring via kMove.',
+  taxis: 'Density steering. +1 = climb toward crowding (aggregate), −1 = flee crowding (disperse/repel), 0 = pure random walk. Costs offspring via kTaxis.',
+  sigma: 'Band-edge softness. Birth/death thresholds are fuzzy, not hard: σ is the half-width of the smooth transition around each bound. Small σ ≈ crisp, Conway-like rules; large σ = gradual.',
+  maxAgeToggle: 'When on, cells also die of old age once they pass "max age". Off by default — death is otherwise purely density-driven.',
+  maxAge: 'Ticks a cell can live before dying of old age (only when max-age death is on).',
+  costs: 'Metabolic cost. When ON, sensing far, moving fast, tolerating a wide density range, and steering all reduce fecundity. Turn it OFF to watch every gene run to its extreme and the board collapse into a grey monoculture — the degenerate attractor.',
+  kMove: 'Cost weight on motility (step²). Higher makes fast movement more expensive in offspring.',
+  kSense: 'Cost weight on perception (rScale²). Higher makes seeing far more expensive.',
+  kTol: 'Cost weight on niche breadth. Higher makes tolerating a wide survival/birth range more expensive.',
+  kTaxis: 'Cost weight on steering (taxis²). Higher makes deliberate movement more expensive.',
+  recomb: 'How offspring inherit genes. clonal = copy one parent. crossover = mix two nearby parents gene-by-gene. blend = average two parents (this halves genetic variance every generation — included to demonstrate evolutionary collapse).',
+  mutation: 'gaussian = each gene is randomly nudged with probability μ. cornered = same, but the four threshold genes (sLo, sHi, bLo, bHi) are also pulled toward the ends of their range, resisting a mushy middle where no structure survives.',
+  mu: 'Mutation rate: the per-gene probability that a gene is nudged when an offspring is born.',
+  sigmaG: 'Mutation size: the standard deviation of each nudge, as a fraction of that gene’s full range.',
+  kappa: 'Cornered pull strength: how hard threshold genes are pushed toward their range ends (only in "cornered" mutation).',
+  speciation: 'Chance that a birth founds a brand-new lineage instead of inheriting the parent’s. Offspring otherwise keep their parent’s lineage, so this is the only way the lineage count can rise. Watch it with lineage coloring.',
+  color: 'phenotype = colour encodes the genome (hue = niche centre, saturation = niche breadth, lightness = motility) — similar genomes look similar. lineage = colour by ancestry: a drift null model where same-hue clumps are founder effects, not adaptation.',
+  lines: 'Draw a link between cells that perceive each other. Solid = mutual perception, dashed = one-way (a real consequence of different rScale). Line opacity follows perception strength, so links fade in and out as cells drift.',
+  seed: 'Random seed. The same seed plus the same parameters reproduces a run exactly.',
+  play: 'Run or pause the simulation. (Space)',
+  stepBtn: 'Advance exactly one tick. (.)',
+  reset: 'Clear and re-seed the population using the Initialize settings below. (R)',
+  population: 'How many cells to place when seeding.',
+  layout: 'Spatial arrangement of the initial seed: scattered uniformly, one central blob, several blobs, a ring, or a low-variance jittered lattice (best for narrow-band genomes that would otherwise avalanche).',
+  genomeInit: 'Genome of seeded cells: clone the current brush, draw uniform-random genes, place two competing clones A/B apart, or seed one clonal lineage (all share a single ancestor — useful with speciation to watch lineages bloom from 1).',
+  spread: 'Genetic jitter added to seeded genomes. A pure clone boom-busts in lockstep; a little spread gives selection material and smooths the opening crash.',
+  applyInit: 'Clear everything and re-seed with the current Initialize settings.',
+  randomize: 'Fill the brush with a random genome.',
+  copyHovered: 'Copy the hovered cell’s genome into the brush.',
+  blobN: 'How many cells a shift-click blob places.',
+  blobJitter: 'Radius of the shift-click blob.',
+  sparkPop: 'Living cell count over time.',
+  sparkGene: 'Mean ± standard deviation of the selected gene across the whole population.',
+  sparkVar: 'Genetic variance index — mean per-gene variance, normalised by range. The headline number: it collapses under blend inheritance and holds steady under crossover.',
+  sparkLin: 'Number of distinct surviving lineages. Falls as lineages go extinct; rises only via speciation.',
+};
+
+const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Motile swarm', 'Allee frontier', 'Membranes', 'Lineage bloom'];
+const PRESET_TIPS = [
+  'Conway-ish — a continuous B3/S23-flavoured regime: tight bands, low motility, short dispersal. Seeded on a lattice, it crashes then blooms into a patchy, oscillator-like population.',
+  'Gray goo — costs off, wide tolerance. Every gene runs to its extreme and the board saturates into a grey monoculture: the degenerate attractor. Toggle "costs" to see why cost matters.',
+  'Blend collapse — blend inheritance averages parents, halving genetic variance each generation. Watch the variance-index sparkline fall off a cliff and the colours wash out.',
+  'Motile swarm — high motility and positive taxis: cells steer toward crowding and self-organise into moving clumps without any birth/death tuning.',
+  'Allee frontier — high loneliness threshold and short dispersal make slow, pushed expansion fronts and strong clade structure (switch to lineage colouring to see the founder clumps).',
+  'Membranes (experimental) — cells aggregate into clumps, but a low overcrowding cap kills the crowded interior, leaving a living shell around a hollow void: rings and walls. A best-guess at emergent “cell membranes”.',
+  'Lineage bloom — one clonal ancestor in a fast, sustaining regime with high speciation, so new lineages are founded faster than they die out and the lineage count climbs from 1. Best viewed with lineage colouring.',
+];
 
 // ---- side panel -----------------------------------------------------------
 function section(title, kids) { return el('section', {}, [el('h2', {}, [title]), ...kids]); }
@@ -58,61 +121,59 @@ function buildSide() {
   side.textContent = '';
 
   // Simulation
-  const playBtn = button(ui.playing ? '❚❚ pause' : '▶ play', togglePlay);
+  const playBtn = button(ui.playing ? '❚❚ pause' : '▶ play', togglePlay, '', HELP.play);
   playBtn.id = 'playbtn';
   side.append(section('Simulation', [
-    el('div', { class: 'seg' }, [playBtn, button('▷ step', () => singleStep()), button('⟲ reset', () => applyInit())]),
-    el('div', { class: 'row' }, [el('label', { class: 'k' }, ['seed']), (() => {
+    el('div', { class: 'seg' }, [playBtn, button('▷ step', () => singleStep(), '', HELP.stepBtn), button('⟲ reset', () => applyInit(), '', HELP.reset)]),
+    withTip(el('div', { class: 'row' }, [el('label', { class: 'k' }, ['seed']), (() => {
       const inp = el('input', { type: 'text' }); inp.value = init.seed;
       inp.addEventListener('change', () => { init.seed = parseInt(inp.value, 10) || 0; });
       return inp;
-    })()]),
+    })()]), HELP.seed),
   ]));
 
   // Presets
-  const names = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Motile swarm', 'Allee frontier'];
   side.append(section('Presets', [
-    el('div', { class: 'grid5' }, names.map((n, i) => button(String(i + 1), () => applyPreset(i)))),
-    el('p', { class: 'hint' }, ['1 Conway · 2 Gray goo · 3 Blend · 4 Swarm · 5 Allee']),
+    el('div', { class: 'grid7' }, PRESET_NAMES.map((n, i) => button(String(i + 1), () => applyPreset(i), '', PRESET_TIPS[i]))),
+    el('p', { class: 'hint' }, ['1 Conway · 2 Gray goo · 3 Blend · 4 Swarm · 5 Allee · 6 Membranes · 7 Lineage bloom — hover for details']),
   ]));
 
   // Rules
+  const ageBtn = button('max-age death', () => { P.maxAgeOn = !P.maxAgeOn; ageBtn.classList.toggle('on', P.maxAgeOn); }, P.maxAgeOn ? 'on' : '', HELP.maxAgeToggle);
   side.append(section('Rules', [
-    slider('softness σ', 0, 2, 0.05, () => P.sigma, (v) => P.sigma = v, f2),
-    el('div', { class: 'row' }, [(() => {
-      const b = button('max-age death', () => { P.maxAgeOn = !P.maxAgeOn; b.classList.toggle('on', P.maxAgeOn); }, P.maxAgeOn ? 'on' : '');
-      return b;
-    })()]),
-    slider('max age', 50, 2000, 10, () => P.maxAge, (v) => P.maxAge = v, (v) => v.toFixed(0)),
+    slider('softness σ', 0, 2, 0.05, () => P.sigma, (v) => P.sigma = v, f2, HELP.sigma),
+    el('div', { class: 'row' }, [ageBtn]),
+    slider('max age', 50, 2000, 10, () => P.maxAge, (v) => P.maxAge = v, (v) => v.toFixed(0), HELP.maxAge),
   ]));
 
   // Costs
   const costToggle = button(P.costsOn ? 'costs ON' : 'costs OFF', () => {
     P.costsOn = !P.costsOn; costToggle.textContent = P.costsOn ? 'costs ON' : 'costs OFF'; costToggle.classList.toggle('on', P.costsOn);
-  }, P.costsOn ? 'on' : '');
+  }, P.costsOn ? 'on' : '', HELP.costs);
   side.append(section('Metabolic cost', [
     el('div', { class: 'row' }, [costToggle]),
-    slider('kMove', 0, 2, 0.05, () => P.kMove, (v) => P.kMove = v, f2),
-    slider('kSense', 0, 2, 0.05, () => P.kSense, (v) => P.kSense = v, f2),
-    slider('kTol', 0, 2, 0.05, () => P.kTol, (v) => P.kTol = v, f2),
-    slider('kTaxis', 0, 2, 0.05, () => P.kTaxis, (v) => P.kTaxis = v, f2),
+    slider('kMove', 0, 2, 0.05, () => P.kMove, (v) => P.kMove = v, f2, HELP.kMove),
+    slider('kSense', 0, 2, 0.05, () => P.kSense, (v) => P.kSense = v, f2, HELP.kSense),
+    slider('kTol', 0, 2, 0.05, () => P.kTol, (v) => P.kTol = v, f2, HELP.kTol),
+    slider('kTaxis', 0, 2, 0.05, () => P.kTaxis, (v) => P.kTaxis = v, f2, HELP.kTaxis),
   ]));
 
   // Inheritance
   side.append(section('Inheritance', [
-    el('div', { class: 'ctrl' }, [el('label', {}, ['recomb']), select([['clonal', 'clonal'], ['crossover', 'crossover'], ['blend', 'blend']], P.recomb, (v) => P.recomb = v), el('span')]),
-    el('div', { class: 'ctrl' }, [el('label', {}, ['mutation']), select([['gaussian', 'gaussian'], ['cornered', 'cornered']], P.mutation, (v) => P.mutation = v), el('span')]),
-    slider('rate μ', 0, 0.5, 0.01, () => P.mu, (v) => P.mu = v, f2),
-    slider('σ_g', 0, 0.3, 0.005, () => P.sigmaG, (v) => P.sigmaG = v, (v) => v.toFixed(3)),
-    slider('corner κ', 0, 0.5, 0.01, () => P.kappa, (v) => P.kappa = v, f2),
+    ctrlSelect('recomb', [['clonal', 'clonal'], ['crossover', 'crossover'], ['blend', 'blend']], P.recomb, (v) => P.recomb = v, HELP.recomb),
+    ctrlSelect('mutation', [['gaussian', 'gaussian'], ['cornered', 'cornered']], P.mutation, (v) => P.mutation = v, HELP.mutation),
+    slider('rate μ', 0, 0.5, 0.01, () => P.mu, (v) => P.mu = v, f2, HELP.mu),
+    slider('σ_g', 0, 0.3, 0.005, () => P.sigmaG, (v) => P.sigmaG = v, (v) => v.toFixed(3), HELP.sigmaG),
+    slider('corner κ', 0, 0.5, 0.01, () => P.kappa, (v) => P.kappa = v, f2, HELP.kappa),
+    slider('speciation', 0, 0.3, 0.005, () => P.speciation, (v) => P.speciation = v, (v) => v.toFixed(3), HELP.speciation),
   ]));
 
   // Rendering
   const linesBtn = button(ui.showLines ? 'lines ON' : 'lines OFF', () => {
     ui.showLines = !ui.showLines; linesBtn.textContent = ui.showLines ? 'lines ON' : 'lines OFF'; linesBtn.classList.toggle('on', ui.showLines);
-  }, ui.showLines ? 'on' : '');
+  }, ui.showLines ? 'on' : '', HELP.lines);
   side.append(section('Rendering', [
-    el('div', { class: 'ctrl' }, [el('label', {}, ['color']), select([['phenotype', 'phenotype'], ['lineage', 'lineage']], ui.colorMode, (v) => ui.colorMode = v), el('span')]),
+    ctrlSelect('color', [['phenotype', 'phenotype'], ['lineage', 'lineage']], ui.colorMode, (v) => ui.colorMode = v, HELP.color),
     el('div', { class: 'row' }, [linesBtn]),
   ]));
 
@@ -121,26 +182,26 @@ function buildSide() {
   const geneRows = GENE_NAMES.map((name, g) => slider(
     name, rr[g][0], rr[g][1], (rr[g][1] - rr[g][0]) / 200,
     () => brush[g], (v) => brush[g] = v,
-    g === GENE.fecundity ? ((v) => v.toFixed(3)) : f2,
+    g === GENE.fecundity ? ((v) => v.toFixed(3)) : f2, HELP[name],
   ));
   side.append(section('Brush genome', [
     ...geneRows,
-    el('div', { class: 'grid2' }, [button('randomize', randomizeBrush), button('copy hovered', copyHovered)]),
+    el('div', { class: 'grid2' }, [button('randomize', randomizeBrush, '', HELP.randomize), button('copy hovered', copyHovered, '', HELP.copyHovered)]),
     el('p', { class: 'hint' }, ['click place · drag paint · shift-click blob · alt-drag erase · hover reads genome']),
   ]));
 
   // Initialize
   side.append(section('Initialize', [
-    slider('population', 100, P.cap, 100, () => init.population, (v) => init.population = v, (v) => v.toFixed(0)),
-    el('div', { class: 'ctrl' }, [el('label', {}, ['layout']), select([['uniform', 'uniform'], ['blob', 'central blob'], ['kblobs', 'k blobs'], ['ring', 'ring'], ['lattice', 'jittered lattice']], init.layout, (v) => init.layout = v), el('span')]),
-    el('div', { class: 'ctrl' }, [el('label', {}, ['genome']), select([['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B']], init.genomeInit, (v) => init.genomeInit = v), el('span')]),
-    slider('spread', 0, 0.15, 0.005, () => init.spread, (v) => init.spread = v, (v) => v.toFixed(3)),
-    button('apply init', applyInit),
+    slider('population', 100, P.cap, 100, () => init.population, (v) => init.population = v, (v) => v.toFixed(0), HELP.population),
+    ctrlSelect('layout', [['uniform', 'uniform'], ['blob', 'central blob'], ['kblobs', 'k blobs'], ['ring', 'ring'], ['lattice', 'jittered lattice']], init.layout, (v) => init.layout = v, HELP.layout),
+    ctrlSelect('genome', [['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B'], ['mono', 'one clone (1 lineage)']], init.genomeInit, (v) => init.genomeInit = v, HELP.genomeInit),
+    slider('spread', 0, 0.15, 0.005, () => init.spread, (v) => init.spread = v, (v) => v.toFixed(3), HELP.spread),
+    button('apply init', applyInit, '', HELP.applyInit),
   ]));
 
   side.append(section('Blob brush', [
-    slider('N', 2, 400, 1, () => init.blobN, (v) => init.blobN = v, (v) => v.toFixed(0)),
-    slider('jitter', 2, 120, 1, () => init.blobJitter, (v) => init.blobJitter = v, (v) => v.toFixed(0)),
+    slider('N', 2, 400, 1, () => init.blobN, (v) => init.blobN = v, (v) => v.toFixed(0), HELP.blobN),
+    slider('jitter', 2, 120, 1, () => init.blobJitter, (v) => init.blobJitter = v, (v) => v.toFixed(0), HELP.blobJitter),
   ]));
 }
 
@@ -150,8 +211,8 @@ const HMAX = 320;
 let sparkCanvases = {};
 function buildBottom() {
   const bar = $('#bottom'); bar.textContent = '';
-  function makeSpark(id, label, headline, extraLabelNode) {
-    const box = el('div', { class: 'spark' + (headline ? ' headline' : '') });
+  function makeSpark(id, label, headline, tip, extraLabelNode) {
+    const box = withTip(el('div', { class: 'spark' + (headline ? ' headline' : '') }), tip);
     const lbl = el('div', { class: 'lbl' }, []);
     lbl.append(extraLabelNode || el('span', {}, [label]));
     const val = el('span', { class: 'val' }); val.id = id + 'v';
@@ -161,11 +222,11 @@ function buildBottom() {
     bar.append(box);
     sparkCanvases[id] = cvs;
   }
-  makeSpark('pop', 'population', false);
+  makeSpark('pop', 'population', false, HELP.sparkPop);
   const dd = select(GENE_NAMES.map((n, i) => [String(i), n]), String(selGene), (v) => { selGene = parseInt(v, 10); });
-  makeSpark('gene', 'gene', false, dd);
-  makeSpark('vi', 'variance index', true);
-  makeSpark('lin', 'lineages', false);
+  makeSpark('gene', 'gene', false, HELP.sparkGene, dd);
+  makeSpark('vi', 'variance index', true, HELP.sparkVar);
+  makeSpark('lin', 'lineages', false, HELP.sparkLin);
 }
 function pushHist(s) {
   hist.pop.push(s.population); hist.vi.push(s.varianceIndex); hist.lin.push(s.lineages);
@@ -227,6 +288,9 @@ function applyInit() {
   } else {
     const centers = [];
     if (init.layout === 'kblobs') for (let i = 0; i < init.k; i++) centers.push([rng.next() * Wx, rng.next() * Wy]);
+    // 'mono' seeds every cell into ONE shared lineage, so lineage count starts at 1
+    // and can only rise via speciation — the clearest way to watch lineages bloom.
+    const lin = init.genomeInit === 'mono' ? 1 : null;
     const genomeOf = () => {
       if (init.genomeInit === 'uniform') { const g = new Float32Array(G); for (let j = 0; j < G; j++) g[j] = rng.range(rr[j][0], rr[j][1]); return g; }
       return jitter(new Float32Array(brush));
@@ -237,7 +301,7 @@ function applyInit() {
       // Spacing derives from population, so density is window-independent.
       const a = Math.sqrt((Wx * Wy) / Math.max(1, n)), jit = 0.1 * a; let placed = 0;
       for (let gy = a / 2; gy < Wy && placed < n; gy += a)
-        for (let gx = a / 2; gx < Wx && placed < n; gx += a) { place(gx + rng.gauss() * jit, gy + rng.gauss() * jit, genomeOf(), null); placed++; }
+        for (let gx = a / 2; gx < Wx && placed < n; gx += a) { place(gx + rng.gauss() * jit, gy + rng.gauss() * jit, genomeOf(), lin); placed++; }
     } else {
       for (let i = 0; i < n; i++) {
         let x, y;
@@ -245,7 +309,7 @@ function applyInit() {
         else if (init.layout === 'blob') { x = Wx / 2 + rng.gauss() * Dm * 0.14; y = Wy / 2 + rng.gauss() * Dm * 0.14; }
         else if (init.layout === 'kblobs') { const c = centers[(rng.next() * centers.length) | 0]; x = c[0] + rng.gauss() * Dm * 0.05; y = c[1] + rng.gauss() * Dm * 0.05; }
         else { const a = rng.next() * 6.283185307179586; x = Wx / 2 + Math.cos(a) * Dm * 0.38; y = Wy / 2 + Math.sin(a) * Dm * 0.38; }
-        place(x, y, genomeOf(), null);
+        place(x, y, genomeOf(), lin);
       }
     }
   }
@@ -282,10 +346,25 @@ const PRESETS = [
     P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian' },
     init: { layout: 'blob', genomeInit: 'brush', population: 8000 },
   },
+  { // Membranes (experimental) — aggregate (positive taxis, short dispersal) into
+    // clumps, but a low overcrowding cap (sHi) kills the crowded interior, so cells
+    // survive only in a shell at the clump's edge: hollow rings/walls around voids.
+    // Best-guess at emergent "cell membranes".
+    brush: { rScale: 1.0, sLo: 0.6, sHi: 2.8, bLo: 0.9, bHi: 2.3, fec: 0.22, dDisp: 0.7, dCV: 0.3, step: 0.05, taxis: 0.55 },
+    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', sigma: 0.4 },
+    init: { layout: 'uniform', genomeInit: 'brush', population: 6000, spread: 0.03 },
+  },
+  { // Lineage bloom — one clonal ancestor (mono seed => 1 lineage) in a fast,
+    // sustaining regime with high speciation, so new lineages are founded faster
+    // than they go extinct and the lineage count climbs from 1.
+    brush: { rScale: 1.0, sLo: 0.6, sHi: 4.0, bLo: 1.0, bHi: 2.6, fec: 0.24, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10 },
+    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', speciation: 0.08, mu: 0.2, sigmaG: 0.06 },
+    init: { layout: 'uniform', genomeInit: 'mono', population: 4000, spread: 0.03 },
+  },
 ];
 function applyPreset(i) {
   const pr = PRESETS[i];
-  Object.assign(P, { sigma: DEFAULTS.sigma }, pr.P);  // reset σ unless the preset sets it
+  Object.assign(P, { sigma: DEFAULTS.sigma, speciation: DEFAULTS.speciation }, pr.P);  // reset σ/speciation unless the preset sets them
   setBrush(pr.brush);
   Object.assign(init, pr.init);
   buildSide();
@@ -434,7 +513,31 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'r' || e.key === 'R') applyInit();
 });
 
+// ---- help tooltips --------------------------------------------------------
+// One floating element follows the cursor and shows the data-tip of whatever
+// control is under it — read live, so rebuilding the panel needs no re-wiring.
+function setupTips() {
+  const tip = el('div'); tip.id = 'uitip'; document.body.appendChild(tip);
+  let cur = null;
+  const place = (e) => {
+    let x = e.clientX + 18, y = e.clientY + 20;
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    if (x + w > window.innerWidth - 8) x = e.clientX - w - 14;
+    if (y + h > window.innerHeight - 8) y = e.clientY - h - 14;
+    tip.style.left = Math.max(8, x) + 'px'; tip.style.top = Math.max(8, y) + 'px';
+  };
+  document.addEventListener('mousemove', (e) => {
+    const t = e.target.closest ? e.target.closest('[data-tip]') : null;
+    if (t) {
+      const txt = t.getAttribute('data-tip');
+      if (txt !== cur) { cur = txt; tip.textContent = txt; tip.style.display = 'block'; }
+      place(e);
+    } else if (cur !== null) { cur = null; tip.style.display = 'none'; }
+  });
+}
+
 // ---- boot -----------------------------------------------------------------
+setupTips();
 resize();
 buildSide();
 buildBottom();

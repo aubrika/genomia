@@ -35,6 +35,7 @@ export const DEFAULTS = {
   world: 1000, R: 17, sigma: 0.6,
   costsOn: true, kMove: 0.4, kSense: 0.3, kTol: 0.5, kTaxis: 0.2,
   recomb: 'crossover', mutation: 'gaussian', mu: 0.1, sigmaG: 0.05, kappa: 0.15,
+  speciation: 0,          // chance a birth founds a NEW lineage (else inherits parent's)
   maxAgeOn: false, maxAge: 400,
   cap: 12000,
 };
@@ -280,7 +281,9 @@ export function step(state, P) {
     const dist = Math.abs(dd + dd * cv * rng.gauss());
     bx[bc] = wrap(X[i] + Math.cos(ang) * dist, Wx);
     by[bc] = wrap(Y[i] + Math.sin(ang) * dist, Wy);
-    bl[bc] = LIN[i];
+    // speciation: occasionally the offspring founds a fresh lineage instead of
+    // inheriting the parent's — the only way lineage count can rise over time.
+    bl[bc] = (P.speciation > 0 && rng.next() < P.speciation) ? state.nextLineage++ : LIN[i];
     bc++;
   }
 

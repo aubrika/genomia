@@ -66,6 +66,10 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 input[type=number], input[type=text] { cursor: text; width: 100%; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .grid5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.grid7 { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+.grid7 button { padding: 7px 0; text-align: center; }
+[data-tip] { cursor: help; }
+[data-tip] input, [data-tip] select, [data-tip] button { cursor: pointer; }
 .seg { display: flex; gap: 0; }
 .seg button { border-radius: 0; flex: 1; border-right: none; }
 .seg button:first-child { border-radius: 4px 0 0 4px; }
@@ -79,6 +83,13 @@ input[type=number], input[type=text] { cursor: text; width: 100%; }
 }
 #tooltip .k { color: var(--muted); }
 #tooltip b { color: var(--accent); font-weight: 600; }
+
+#uitip {
+  position: fixed; z-index: 20; pointer-events: none; display: none;
+  max-width: 340px; padding: 11px 14px; font-size: 16px; line-height: 1.45;
+  color: var(--ink); background: rgba(20, 18, 15, 0.97); border: 1px solid var(--divider);
+  border-radius: 6px; box-shadow: 0 6px 22px rgba(0,0,0,0.5);
+}
 
 #hud { position: absolute; top: 16px; left: 18px; z-index: 4; color: var(--muted); font-size: 18px; letter-spacing: 0.06em; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.6); }
 #hud b { color: var(--ink); }

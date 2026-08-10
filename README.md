@@ -34,6 +34,12 @@ play, **`.`** to single-step, **R** to reset.
 - **Adjacency lines** — solid where perception is mutual, dashed where one-way
   (asymmetric perception is a real consequence of the `rScale` gene). Alpha scales
   with kernel weight, so links condense and dissolve as cells drift.
+- **Membranes** (preset 6, experimental) — cells aggregate but a low overcrowding
+  cap kills the crowded interior, leaving a living shell around a void.
+- **Lineage bloom** (preset 7) — one clonal ancestor plus **speciation** (a small
+  chance each birth founds a new lineage) makes the lineage count climb from 1.
+
+Every control and gene has a **hover tooltip** explaining what it does.
 
 ## Interaction
 
