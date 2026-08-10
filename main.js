@@ -132,7 +132,7 @@ function buildSide() {
   // Initialize
   side.append(section('Initialize', [
     slider('population', 100, P.cap, 100, () => init.population, (v) => init.population = v, (v) => v.toFixed(0)),
-    el('div', { class: 'ctrl' }, [el('label', {}, ['layout']), select([['uniform', 'uniform'], ['blob', 'central blob'], ['kblobs', 'k blobs'], ['ring', 'ring']], init.layout, (v) => init.layout = v), el('span')]),
+    el('div', { class: 'ctrl' }, [el('label', {}, ['layout']), select([['uniform', 'uniform'], ['blob', 'central blob'], ['kblobs', 'k blobs'], ['ring', 'ring'], ['lattice', 'jittered lattice']], init.layout, (v) => init.layout = v), el('span')]),
     el('div', { class: 'ctrl' }, [el('label', {}, ['genome']), select([['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B']], init.genomeInit, (v) => init.genomeInit = v), el('span')]),
     slider('spread', 0, 0.15, 0.005, () => init.spread, (v) => init.spread = v, (v) => v.toFixed(3)),
     button('apply init', applyInit),
@@ -207,9 +207,9 @@ function drawSparks(s) {
 // ---- init / presets -------------------------------------------------------
 function applyInit() {
   resetState(state, init.seed | 0);
-  const rr = geneR(), W = P.world, n = init.population, rng = state.rng;
-  const wrapc = (v) => ((v % W) + W) % W;
-  const place = (x, y, g, lin) => addAgent(state, wrapc(x), wrapc(y), g, lin, rr);
+  const rr = geneR(), Wx = P.worldW, Wy = P.worldH, Dm = Math.min(Wx, Wy), n = init.population, rng = state.rng;
+  const wx_ = (v) => ((v % Wx) + Wx) % Wx, wy_ = (v) => ((v % Wy) + Wy) % Wy;
+  const place = (x, y, g, lin) => addAgent(state, wx_(x), wy_(y), g, lin, rr);
 
   // small per-gene jitter around a template — a monoclonal seed boom-busts in
   // lockstep, so a touch of variation gives selection something to act on.
@@ -219,25 +219,34 @@ function applyInit() {
     const A = new Float32Array(brush), B = new Float32Array(brush);
     B[GENE.sLo] += 1.6; B[GENE.sHi] += 1.6; B[GENE.bLo] += 1.6; B[GENE.bHi] += 1.6;
     B[GENE.step] = Math.min(rr[GENE.step][1], B[GENE.step] * 1.8);
-    const half = n >> 1, jr = W * 0.10;
+    const half = n >> 1, jr = Dm * 0.12;
     for (let i = 0; i < n; i++) {
       const isA = i < half, ang = rng.next() * 6.283185307179586, rad = Math.abs(rng.gauss()) * jr;
-      place((isA ? 0.3 : 0.7) * W + Math.cos(ang) * rad, 0.5 * W + Math.sin(ang) * rad, jitter(new Float32Array(isA ? A : B)), isA ? 1 : 2);
+      place((isA ? 0.3 : 0.7) * Wx + Math.cos(ang) * rad, 0.5 * Wy + Math.sin(ang) * rad, jitter(new Float32Array(isA ? A : B)), isA ? 1 : 2);
     }
   } else {
     const centers = [];
-    if (init.layout === 'kblobs') for (let i = 0; i < init.k; i++) centers.push([rng.next() * W, rng.next() * W]);
+    if (init.layout === 'kblobs') for (let i = 0; i < init.k; i++) centers.push([rng.next() * Wx, rng.next() * Wy]);
     const genomeOf = () => {
       if (init.genomeInit === 'uniform') { const g = new Float32Array(G); for (let j = 0; j < G; j++) g[j] = rng.range(rr[j][0], rr[j][1]); return g; }
       return jitter(new Float32Array(brush));
     };
-    for (let i = 0; i < n; i++) {
-      let x, y;
-      if (init.layout === 'uniform') { x = rng.next() * W; y = rng.next() * W; }
-      else if (init.layout === 'blob') { x = W / 2 + rng.gauss() * W * 0.12; y = W / 2 + rng.gauss() * W * 0.12; }
-      else if (init.layout === 'kblobs') { const c = centers[(rng.next() * centers.length) | 0]; x = c[0] + rng.gauss() * W * 0.05; y = c[1] + rng.gauss() * W * 0.05; }
-      else { const a = rng.next() * 6.283185307179586; x = W / 2 + Math.cos(a) * W * 0.35; y = W / 2 + Math.sin(a) * W * 0.35; }
-      place(x, y, genomeOf(), null);
+    if (init.layout === 'lattice') {
+      // jittered grid — low spatial variance, so a narrow-band (Conway-ish) genome
+      // starts mostly in its survival window instead of in the density tails.
+      // Spacing derives from population, so density is window-independent.
+      const a = Math.sqrt((Wx * Wy) / Math.max(1, n)), jit = 0.1 * a; let placed = 0;
+      for (let gy = a / 2; gy < Wy && placed < n; gy += a)
+        for (let gx = a / 2; gx < Wx && placed < n; gx += a) { place(gx + rng.gauss() * jit, gy + rng.gauss() * jit, genomeOf(), null); placed++; }
+    } else {
+      for (let i = 0; i < n; i++) {
+        let x, y;
+        if (init.layout === 'uniform') { x = rng.next() * Wx; y = rng.next() * Wy; }
+        else if (init.layout === 'blob') { x = Wx / 2 + rng.gauss() * Dm * 0.14; y = Wy / 2 + rng.gauss() * Dm * 0.14; }
+        else if (init.layout === 'kblobs') { const c = centers[(rng.next() * centers.length) | 0]; x = c[0] + rng.gauss() * Dm * 0.05; y = c[1] + rng.gauss() * Dm * 0.05; }
+        else { const a = rng.next() * 6.283185307179586; x = Wx / 2 + Math.cos(a) * Dm * 0.38; y = Wy / 2 + Math.sin(a) * Dm * 0.38; }
+        place(x, y, genomeOf(), null);
+      }
     }
   }
   for (const k in hist) hist[k].length = 0;
@@ -245,10 +254,13 @@ function applyInit() {
 }
 
 const PRESETS = [
-  { // Conway-ish
-    brush: { rScale: 1.0, sLo: 2.0, sHi: 3.3, bLo: 2.7, bHi: 3.3, fec: 0.15, dDisp: 1.2, dCV: 0.3, step: 0.05, taxis: 0.0 },
-    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian' },
-    init: { layout: 'blob', genomeInit: 'brush', population: 8000 },
+  { // Conway-ish — a continuous B3/S23-flavored regime: tight low-motility bands,
+    // short dispersal so births reinforce local structure. A full field avalanches
+    // (soft death at the density lower-edge cascades) then blooms back from a
+    // lattice seed into a patchy, oscillator-like population.
+    brush: { rScale: 1.0, sLo: 1.4, sHi: 3.6, bLo: 2.0, bHi: 3.4, fec: 0.24, dDisp: 0.6, dCV: 0.3, step: 0.05, taxis: 0.15 },
+    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', sigma: 0.4 },
+    init: { layout: 'lattice', genomeInit: 'brush', population: 11000, spread: 0.03 },
   },
   { // Gray goo
     brush: { rScale: 1.2, sLo: 0.0, sHi: 12, bLo: 0.0, bHi: 12, fec: 0.30, dDisp: 1.0, dCV: 0.3, step: 0.10, taxis: 0.0 },
@@ -273,7 +285,7 @@ const PRESETS = [
 ];
 function applyPreset(i) {
   const pr = PRESETS[i];
-  Object.assign(P, pr.P);
+  Object.assign(P, { sigma: DEFAULTS.sigma }, pr.P);  // reset σ unless the preset sets it
   setBrush(pr.brush);
   Object.assign(init, pr.init);
   buildSide();
@@ -296,37 +308,54 @@ function copyHovered() {
 // ---- canvas / view --------------------------------------------------------
 const canvas = $('#canvas');
 const ctx = canvas.getContext('2d', { alpha: false });
+// The world IS the window: a rectangular torus the size of the canvas, drawn 1:1
+// (scale 1, no letterbox), with the UI floating over it. Perception radius R
+// scales with √area, so density depends only on population (window-independent) —
+// every preset stays calibrated at any window size. A resize just "zooms" the
+// running ecosystem: positions, R, and the R-relative genes (dDisp, step) all
+// scale together, so the dynamics are preserved.
+const R_FROM_AREA = (area) => Math.max(8, Math.min(40, 0.017 * Math.sqrt(area)));
 function resize() {
   const rect = $('#stage').getBoundingClientRect();
+  const oldW = P.worldW, oldH = P.worldH, oldR = P.R;
   canvas.width = Math.max(1, Math.floor(rect.width));
   canvas.height = Math.max(1, Math.floor(rect.height));
-  const scale = Math.min(canvas.width, canvas.height) / P.world;
-  view.scale = scale;
-  view.ox = (canvas.width - P.world * scale) / 2;
-  view.oy = (canvas.height - P.world * scale) / 2;
+  P.worldW = canvas.width; P.worldH = canvas.height;
+  view.scale = 1; view.ox = 0; view.oy = 0;
+  const newR = R_FROM_AREA(P.worldW * P.worldH), s = newR / oldR;
+  if (oldW) {
+    const sx = P.worldW / oldW, sy = P.worldH / oldH;
+    for (let i = 0; i < state.count; i++) {
+      state.x[i] *= sx; state.y[i] *= sy;
+      state.genome[i * G + GENE.dDisp] *= s; state.genome[i * G + GENE.step] *= s;
+    }
+  }
+  brush[GENE.dDisp] *= s; brush[GENE.step] *= s;   // keep the brush R-relative too
+  P.R = newR; P._rangesR = -1;                      // force sim to recompute gene ranges
+  if (oldW) buildSide();
 }
 window.addEventListener('resize', resize);
 
 function worldFromEvent(e) {
   const r = canvas.getBoundingClientRect();
-  return { x: (e.clientX - r.left - view.ox) / view.scale, y: (e.clientY - r.top - view.oy) / view.scale };
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
 }
 function pickAgent(wx, wy) {
-  const W = P.world, halfW = W / 2, thr = 8 / view.scale; let bd = thr * thr, best = -1;
+  const Wx = P.worldW, Wy = P.worldH, hx = Wx / 2, hy = Wy / 2, thr = 8; let bd = thr * thr, best = -1;
   for (let i = 0; i < state.count; i++) {
     let dx = state.x[i] - wx, dy = state.y[i] - wy;
-    if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
-    if (dy > halfW) dy -= W; else if (dy < -halfW) dy += W;
+    if (dx > hx) dx -= Wx; else if (dx < -hx) dx += Wx;
+    if (dy > hy) dy -= Wy; else if (dy < -hy) dy += Wy;
     const d2 = dx * dx + dy * dy; if (d2 < bd) { bd = d2; best = i; }
   }
   return best;
 }
 function eraseAt(wx, wy) {
-  const W = P.world, halfW = W / 2, r = 18 / view.scale, r2 = r * r;
+  const Wx = P.worldW, Wy = P.worldH, hx = Wx / 2, hy = Wy / 2, r = 18, r2 = r * r;
   for (let i = 0; i < state.count;) {
     let dx = state.x[i] - wx, dy = state.y[i] - wy;
-    if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
-    if (dy > halfW) dy -= W; else if (dy < -halfW) dy += W;
+    if (dx > hx) dx -= Wx; else if (dx < -hx) dx += Wx;
+    if (dy > hy) dy -= Wy; else if (dy < -hy) dy += Wy;
     if (dx * dx + dy * dy < r2) {
       const last = --state.count;
       state.x[i] = state.x[last]; state.y[i] = state.y[last]; state.age[i] = state.age[last]; state.lineage[i] = state.lineage[last];
@@ -335,10 +364,11 @@ function eraseAt(wx, wy) {
   }
 }
 function placeBlob(wx, wy) {
-  const rr = geneR(), W = P.world, rng = state.rng, wrapc = (v) => ((v % W) + W) % W;
+  const rr = geneR(), Wx = P.worldW, Wy = P.worldH, rng = state.rng;
+  const wx_ = (v) => ((v % Wx) + Wx) % Wx, wy_ = (v) => ((v % Wy) + Wy) % Wy;
   for (let i = 0; i < init.blobN; i++) {
     const ang = rng.next() * 6.283185307179586, rad = Math.abs(rng.gauss()) * init.blobJitter;
-    addAgent(state, wrapc(wx + Math.cos(ang) * rad), wrapc(wy + Math.sin(ang) * rad), new Float32Array(brush), null, rr);
+    addAgent(state, wx_(wx + Math.cos(ang) * rad), wy_(wy + Math.sin(ang) * rad), new Float32Array(brush), null, rr);
   }
 }
 
@@ -408,9 +438,10 @@ window.addEventListener('keydown', (e) => {
 resize();
 buildSide();
 buildBottom();
-applyInit();
+const presetM = location.hash.match(/preset=?(\d)/);  // #preset=1 — boot into a preset (dev/testing)
+if (presetM) applyPreset(+presetM[1] - 1); else applyInit();
 // prefers-reduced-motion => stay paused (default); otherwise also default paused per spec
-const runM = location.hash.match(/run(\d+)/);       // #run400 — pre-step headlessly (dev/testing)
+const runM = location.hash.match(/run=?(\d+)/);        // #run400 — pre-step headlessly (dev/testing)
 if (runM) { const k = +runM[1]; for (let i = 0; i < k; i++) step(state, P); pushHist(computeStats(state, P)); }
 if (location.hash.includes('play')) togglePlay();
 requestAnimationFrame(frame);

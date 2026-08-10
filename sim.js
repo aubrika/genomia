@@ -118,10 +118,10 @@ function ranges(state, P) {
 
 // Weighted-reservoir pick of a second parent among the emitter's perceived
 // neighbors (kernel weight = perception strength). Returns index or -1 if alone.
-function pickSecondParent(state, i, rng, counts, items, cellIdx, nx, ny, W, P) {
+function pickSecondParent(state, i, rng, counts, items, cellIdx, nx, ny, Wx, Wy, P) {
   const R = P.R, base = i * G;
   const ri = R * state.genome[base + GENE.rScale], ri2 = ri * ri;
-  const xi = state.x[i], yi = state.y[i], halfW = W / 2;
+  const xi = state.x[i], yi = state.y[i], halfWx = Wx / 2, halfWy = Wy / 2;
   const cx = cellIdx[i] % nx, cy = (cellIdx[i] / nx) | 0;
   let total = 0, chosen = -1;
   for (let ddy = -1; ddy <= 1; ddy++) {
@@ -132,8 +132,8 @@ function pickSecondParent(state, i, rng, counts, items, cellIdx, nx, ny, W, P) {
       for (let p = counts[c]; p < counts[c + 1]; p++) {
         const j = items[p]; if (j === i) continue;
         let dx = state.x[j] - xi, dy = state.y[j] - yi;
-        if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
-        if (dy > halfW) dy -= W; else if (dy < -halfW) dy += W;
+        if (dx > halfWx) dx -= Wx; else if (dx < -halfWx) dx += Wx;
+        if (dy > halfWy) dy -= Wy; else if (dy < -halfWy) dy += Wy;
         const d2 = dx * dx + dy * dy;
         if (d2 < ri2) {
           const wj = 1 - d2 / ri2, wgt = wj * wj;
@@ -162,11 +162,11 @@ function mutate(bg, off, rng, P, rr) {
   }
 }
 
-function buildOffspring(state, i, rng, P, rr, bg, off, counts, items, cellIdx, nx, ny, W) {
+function buildOffspring(state, i, rng, P, rr, bg, off, counts, items, cellIdx, nx, ny, Wx, Wy) {
   const base = i * G, GEN = state.genome, mode = P.recomb;
   for (let g = 0; g < G; g++) bg[off + g] = GEN[base + g];
   if (mode !== 'clonal') {
-    const j = pickSecondParent(state, i, rng, counts, items, cellIdx, nx, ny, W, P);
+    const j = pickSecondParent(state, i, rng, counts, items, cellIdx, nx, ny, Wx, Wy, P);
     if (j >= 0) {
       const bj = j * G;
       if (mode === 'crossover') {
@@ -183,7 +183,10 @@ function buildOffspring(state, i, rng, P, rr, bg, off, counts, items, cellIdx, n
 // One strictly-synchronous tick: densities from tick-start positions, then death,
 // then birth, then movement. Earlier agents never see later agents' effects.
 export function step(state, P) {
-  const W = P.world, R = P.R, N = state.count;
+  // Rectangular torus: worldW/worldH if present (the app fills the window),
+  // else a square `world` (the headless tests).
+  const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
+  const R = P.R, N = state.count;
   const rr = ranges(state, P);
   const rng = state.rng;
   const s = ensureScratch(state);
@@ -193,7 +196,7 @@ export function step(state, P) {
   // 1. Uniform-grid spatial index. Bucket = R*1.5 = max perception radius, so a
   //    3x3 bucket neighborhood always covers any cell's r_i.
   const bucket = R * 1.5;
-  const nx = Math.max(1, Math.ceil(W / bucket)), ny = nx, nc = nx * ny;
+  const nx = Math.max(1, Math.ceil(Wx / bucket)), ny = Math.max(1, Math.ceil(Wy / bucket)), nc = nx * ny;
   let counts = s.counts;
   if (!counts || counts.length < nc + 1) { counts = s.counts = new Int32Array(nc + 1); s.cursor = new Int32Array(nc); }
   else counts.fill(0, 0, nc + 1);
@@ -210,7 +213,7 @@ export function step(state, P) {
   for (let i = 0; i < N; i++) { const c = cellIdx[i]; items[cursor[c]++] = i; }
 
   // 2. Density n_i (kernel-weighted count) and normalized gradient direction ĝ_i.
-  const halfW = W / 2;
+  const halfWx = Wx / 2, halfWy = Wy / 2;
   for (let i = 0; i < N; i++) {
     const base = i * G;
     const ri = R * GEN[base + GENE.rScale], ri2 = ri * ri;
@@ -225,8 +228,8 @@ export function step(state, P) {
         for (let p = counts[c]; p < counts[c + 1]; p++) {
           const j = items[p]; if (j === i) continue;
           let dx = X[j] - xi, dy = Y[j] - yi;
-          if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
-          if (dy > halfW) dy -= W; else if (dy < -halfW) dy += W;
+          if (dx > halfWx) dx -= Wx; else if (dx < -halfWx) dx += Wx;
+          if (dy > halfWy) dy -= Wy; else if (dy < -halfWy) dy += Wy;
           const d2 = dx * dx + dy * dy;
           if (d2 < ri2) {
             const wj = 1 - d2 / ri2, wgt = wj * wj; // (1 - u^2)^2
@@ -271,12 +274,12 @@ export function step(state, P) {
     }
     if (rng.next() >= feff * win) continue;
     if (state.count + bc >= P.cap) continue; // reject births at the hard cap
-    buildOffspring(state, i, rng, P, rr, bg, bc * G, counts, items, cellIdx, nx, ny, W);
+    buildOffspring(state, i, rng, P, rr, bg, bc * G, counts, items, cellIdx, nx, ny, Wx, Wy);
     const ang = rng.next() * 6.283185307179586;
     const dd = GEN[base + GENE.dDisp], cv = GEN[base + GENE.dCV];
     const dist = Math.abs(dd + dd * cv * rng.gauss());
-    bx[bc] = wrap(X[i] + Math.cos(ang) * dist, W);
-    by[bc] = wrap(Y[i] + Math.sin(ang) * dist, W);
+    bx[bc] = wrap(X[i] + Math.cos(ang) * dist, Wx);
+    by[bc] = wrap(Y[i] + Math.sin(ang) * dist, Wy);
     bl[bc] = LIN[i];
     bc++;
   }
@@ -291,7 +294,7 @@ export function step(state, P) {
     let dy = (1 - at) * ryu + tx * gy[i];
     const dl = Math.hypot(dx, dy);
     if (dl > 1e-9) { dx /= dl; dy /= dl; } else { dx = rxu; dy = ryu; }
-    X[i] = wrap(X[i] + dx * st, W); Y[i] = wrap(Y[i] + dy * st, W);
+    X[i] = wrap(X[i] + dx * st, Wx); Y[i] = wrap(Y[i] + dy * st, Wy);
     AGE[i] += 1;
   }
 

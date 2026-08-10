@@ -64,7 +64,7 @@ export function draw(ctx, state, P, view, opts) {
   ctx.fillStyle = GROUND;
   ctx.fillRect(0, 0, cw, ch);
 
-  const N = state.count, GEN = state.genome, R = P.R, W = P.world;
+  const N = state.count, GEN = state.genome, R = P.R;
   const { scale, ox, oy } = view;
   ensureColor(state.cap);
 
@@ -91,10 +91,12 @@ export function draw(ctx, state, P, view, opts) {
 }
 
 function drawLines(ctx, state, P, view, opts) {
-  const N = state.count, GEN = state.genome, R = P.R, W = P.world, halfW = W / 2;
+  const N = state.count, GEN = state.genome, R = P.R;
+  const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
+  const halfWx = Wx / 2, halfWy = Wy / 2;
   const X = state.x, Y = state.y;
   const bucket = R * 1.5;
-  const nx = Math.max(1, Math.ceil(W / bucket)), ny = nx, nc = nx * ny;
+  const nx = Math.max(1, Math.ceil(Wx / bucket)), ny = Math.max(1, Math.ceil(Wy / bucket)), nc = nx * ny;
   const counts = new Int32Array(nc + 1), cellIdx = new Int32Array(N);
   for (let i = 0; i < N; i++) {
     let cx = (X[i] / bucket) | 0; if (cx >= nx) cx = nx - 1; else if (cx < 0) cx = 0;
@@ -118,8 +120,8 @@ function drawLines(ctx, state, P, view, opts) {
         for (let p = counts[c]; p < counts[c + 1]; p++) {
           const j = items[p]; if (j <= i) continue;            // each unordered pair once
           let dx = X[j] - X[i], dy = Y[j] - Y[i];
-          if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
-          if (dy > halfW) dy -= W; else if (dy < -halfW) dy += W;
+          if (dx > halfWx) dx -= Wx; else if (dx < -halfWx) dx += Wx;
+          if (dy > halfWy) dy -= Wy; else if (dy < -halfWy) dy += Wy;
           const d = Math.hypot(dx, dy);
           const rj = R * GEN[j * G + GENE.rScale];
           const rmax = ri > rj ? ri : rj;
@@ -152,8 +154,8 @@ function drawLines(ctx, state, P, view, opts) {
       if (pM[e] !== (pass === 0 ? 1 : 0)) continue;
       const i = pI[e], j = pJ[e], w = pW[e];
       let dx = X[j] - X[i], dy = Y[j] - Y[i];
-      if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
-      if (dy > halfW) dy -= W; else if (dy < -halfW) dy += W;
+      if (dx > halfWx) dx -= Wx; else if (dx < -halfWx) dx += Wx;
+      if (dy > halfWy) dy -= Wy; else if (dy < -halfWy) dy += Wy;
       const alpha = (0.06 + 0.34 * w) * (pass === 0 ? 1 : 0.5);
       const r = (rB[i] + rB[j]) >> 1, g = (gB[i] + gB[j]) >> 1, b = (bB[i] + bB[j]) >> 1;
       ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
@@ -168,7 +170,9 @@ function drawLines(ctx, state, P, view, opts) {
 }
 
 function drawHover(ctx, state, P, view, h) {
-  const N = state.count, GEN = state.genome, R = P.R, W = P.world, halfW = W / 2;
+  const N = state.count, GEN = state.genome, R = P.R;
+  const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
+  const halfWx = Wx / 2, halfWy = Wy / 2;
   const X = state.x, Y = state.y, { scale, ox, oy } = view;
   const ri = R * GEN[h * G + GENE.rScale];
   // this cell's links at full alpha (brute force over N — one cell, cheap enough)
@@ -178,8 +182,8 @@ function drawHover(ctx, state, P, view, h) {
   for (let j = 0; j < N; j++) {
     if (j === h) continue;
     let dx = X[j] - X[h], dy = Y[j] - Y[h];
-    if (dx > halfW) dx -= W; else if (dx < -halfW) dx += W;
-    if (dy > halfW) dy -= W; else if (dy < -halfW) dy += W;
+    if (dx > halfWx) dx -= Wx; else if (dx < -halfWx) dx += Wx;
+    if (dy > halfWy) dy -= Wy; else if (dy < -halfWy) dy += Wy;
     const d = Math.hypot(dx, dy);
     const rj = R * GEN[j * G + GENE.rScale];
     if (d >= (ri > rj ? ri : rj)) continue;
