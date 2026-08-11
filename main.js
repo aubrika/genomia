@@ -13,6 +13,7 @@ const view = { scale: 1, ox: 0, oy: 0 };
 const ui = { playing: false, colorMode: 'phenotype', showLines: true, lineCap: 20000, hovered: -1 };
 const init = { population: 6000, layout: 'uniform', k: 6, genomeInit: 'tworand', spread: 0.03, blobN: 60, blobJitter: 26, seed: 12345 };
 let selGene = GENE.step;
+let curPreset = -1;   // index of the last-applied preset (-1 = the default two-lineage scene)
 
 // default brush = a viable "aggregator" so the sandbox is alive on first play
 const brush = new Float32Array(G);
@@ -134,15 +135,16 @@ const HELP = {
 };
 
 const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Motile swarm', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web'];
-const PRESET_TIPS = [
-  'Conway-ish — a continuous B3/S23-flavoured regime: tight bands, low motility, short dispersal. Seeded on a lattice, it crashes then blooms into a patchy, oscillator-like population.',
-  'Gray goo — costs off, wide tolerance. Every gene runs to its extreme and the board saturates into a grey monoculture: the degenerate attractor. Toggle "costs" to see why cost matters.',
-  'Blend collapse — blend inheritance averages parents, halving genetic variance each generation. Watch the variance-index sparkline fall off a cliff and the colours wash out.',
-  'Motile swarm — high motility and positive taxis: cells steer toward crowding and self-organise into moving clumps without any birth/death tuning.',
-  'Allee frontier — high loneliness threshold and short dispersal make slow, pushed expansion fronts and strong clade structure (switch to genealogy colouring to see the founder clumps).',
-  'Membranes (experimental) — cells aggregate, but a low overcrowding cap thins the crowded interior, and a HIGH niche-breadth cost (kTol) stops that cap from evolving upward — so clumps stay loose and partly hollow instead of filling in over time. A best-guess at emergent “cell membranes”; true hollow rings are hard here because density and crowding-tolerance are coupled.',
-  'Species bloom — one founder lineage in a fast, mutating regime with a low species threshold, so genomes keep diverging past it and the species count climbs from 1. Switch to genealogy colouring to watch the palette fracture into a family tree.',
-  'Trophic web — the energy model on, over a patchy resource field. One mixed lineage under strong specialization selection splits into green autotroph "plants" (harvesting the field) and red heterotroph "animals" (preying on the plants) — an emergent food chain. Coloured by trophic type; watch the plant/animal counts in the top-left.',
+// short, persistent one-liners shown under the preset menu (no hover needed)
+const PRESET_BLURBS = [
+  'Tight Conway-like bands — crashes, then blooms back.',
+  'Costs off: every gene runs to its extreme; a grey monoculture.',
+  'Blend inheritance averages parents; genetic variance collapses.',
+  'High motility and taxis; cells self-organise into moving clumps.',
+  'High loneliness threshold; slow, pushed expansion fronts.',
+  'Aggregates with thinned, partly hollow interiors.',
+  'Fast mutation, low threshold; the species count climbs from 1.',
+  'Energy model on: plants graze the flora, animals evolve to hunt them.',
 ];
 
 // ---- side panel -----------------------------------------------------------
@@ -176,10 +178,11 @@ function buildSide() {
     })()]), HELP.seed),
   ]));
 
-  // Presets
+  // Presets — a menu, with the selected scenario's description shown persistently.
+  const presetOpts = [['', 'Choose a preset…'], ...PRESET_NAMES.map((n, i) => [String(i), n])];
   side.append(section('Presets', [
-    el('div', { class: 'grid7' }, PRESET_NAMES.map((n, i) => button(String(i + 1), () => applyPreset(i), '', PRESET_TIPS[i]))),
-    el('p', { class: 'hint' }, ['1 Conway · 2 Gray goo · 3 Blend · 4 Swarm · 5 Allee · 6 Membranes · 7 Species bloom · 8 Trophic web — hover for details']),
+    ctrlSelect('scenario', presetOpts, curPreset >= 0 ? String(curPreset) : '', (v) => { if (v !== '') applyPreset(+v); }),
+    el('p', { class: 'hint' }, [curPreset >= 0 ? PRESET_BLURBS[curPreset] : 'A starting scenario. The default scene is two lineages competing for the space.']),
   ]));
 
   // Rules
@@ -289,9 +292,9 @@ function buildBottom() {
   makeSpark('pop', 'population', false, HELP.sparkPop);
   const dd = select(GENE_NAMES.map((n, i) => [String(i), n]), String(selGene), (v) => { selGene = parseInt(v, 10); });
   makeSpark('gene', 'gene', false, HELP.sparkGene, dd);
-  makeSpark('vi', 'variance index', true, HELP.sparkVar);
+  makeSpark('vi', 'variance', true, HELP.sparkVar);
   makeSpark('lin', 'species', false, HELP.sparkSpecies);
-  makeSpark('share', 'lineage share', false, HELP.sparkShare);
+  makeSpark('share', 'share', false, HELP.sparkShare);
 }
 function pushHist(s) {
   hist.pop.push(s.population); hist.vi.push(s.varianceIndex); hist.lin.push(s.species);
@@ -506,6 +509,7 @@ const PRESETS = [
 ];
 function applyPreset(i) {
   const pr = PRESETS[i];
+  curPreset = i;
   Object.assign(P, {
     sigma: DEFAULTS.sigma, genusThreshold: DEFAULTS.genusThreshold, speciesThreshold: DEFAULTS.speciesThreshold,
     isolation: DEFAULTS.isolation, mu: DEFAULTS.mu, sigmaG: DEFAULTS.sigmaG, macroRate: DEFAULTS.macroRate,

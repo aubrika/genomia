@@ -32,13 +32,14 @@ html, body { height: 100%; margin: 0; background: var(--ground); color: var(--in
 }
 
 /* sparklines */
-.spark { flex: 1 1 0; padding: 14px 16px; border-right: 1px solid var(--divider); min-width: 0; display: flex; flex-direction: column; }
+.spark { flex: 1 1 0; padding: 10px 13px; border-right: 1px solid var(--divider); min-width: 0; display: flex; flex-direction: column; }
 .spark:last-child { border-right: none; }
-.spark .lbl { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 16px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.spark .val { color: var(--ink); font-size: 22px; }
+.spark .lbl { color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-size: 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; }
+.spark .lbl > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.spark .val { color: var(--ink); font-size: 18px; }
 .spark.headline .val { color: var(--accent); }
 .spark canvas { width: 100%; flex: 1 1 0; margin-top: 6px; }
-.spark select { background: transparent; color: var(--muted); border: none; font-family: var(--mono); font-size: 16px; text-transform: uppercase; letter-spacing: 0.08em; }
+.spark select { background: transparent; color: var(--muted); border: none; font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; padding: 0; max-width: 100%; }
 
 /* side panel */
 section { border-bottom: 1px solid var(--divider); padding: 16px 18px; }
