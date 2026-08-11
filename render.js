@@ -2,7 +2,8 @@
 // semantic (similar genomes look similar); adjacency lines show that "touching"
 // in continuous space is a continuous quantity. Kept separate from sim.js.
 
-import { G, GENE, geneRanges, makeFractalNoise } from './sim.js';
+import { G, GENE, geneRanges } from './sim.js';
+import { makeRNG } from './prng.js';
 
 // --- color -----------------------------------------------------------------
 // Phenotype: hue=niche center, saturation=niche breadth, lightness=motility.
@@ -101,62 +102,106 @@ function ensurePairs(need) {
 
 const GROUND = '#12100E';
 
-// The resource field, drawn as an organic "lichen": a fine static fractal-noise
-// texture (mottled growth) modulated by the live resource level, then bilinearly
-// smoothed up to the canvas. Where cells graze, the resource drops and the lichen
-// goes dark — so you literally watch the population eat holes into it. The texture is
-// decoupled from the coarse ecology grid, so it looks fine-grained without changing
-// carrying capacity. Cached; rebuilt only when the canvas size or field seed changes.
-let lcv = null, lctx = null, limg = null, lbase = null, ltint = null, lW = 0, lH = 0, lKey = '';
-function ensureLichen(cw, ch, seed) {
-  const tw = Math.max(64, Math.min(220, Math.round(cw / 5)));
-  const th = Math.max(48, Math.round(tw * ch / cw));
-  const key = tw + 'x' + th + '@' + seed;
-  if (key === lKey && lbase) return;
-  lKey = key; lW = tw; lH = th;
-  lcv = document.createElement('canvas'); lcv.width = tw; lcv.height = th;
-  lctx = lcv.getContext('2d'); limg = lctx.createImageData(tw, th);
-  lbase = new Float32Array(tw * th); ltint = new Float32Array(tw * th);
-  const mott = makeFractalNoise((seed ^ 0x5bd1e995) >>> 0, [{ L: 8, a: 1 }, { L: 16, a: 0.6 }, { L: 32, a: 0.35 }, { L: 64, a: 0.2 }]);
-  const tnt = makeFractalNoise((seed ^ 0xa136aaad) >>> 0, [{ L: 4, a: 1 }, { L: 8, a: 0.5 }]);
-  for (let y = 0; y < th; y++) {
-    for (let x = 0; x < tw; x++) {
-      const m = Math.pow(mott(x / tw, y / th), 1.4);   // sharpen → mottled, with bare specks
-      const i = y * tw + x;
-      lbase[i] = 0.32 + 0.68 * m;                       // texture multiplier ~[0.32,1]
-      ltint[i] = tnt(x / tw, y / th) * 2 - 1;           // warm/cool colour variation [-1,1]
+// The resource field, drawn in the same flat-disc-and-line language as the cells:
+// a fairly uniform but organic scatter of "flora" marks (grass/moss dots, the odd
+// flower) whose size and brightness follow the local resource and vanish where the
+// population has grazed, plus a "membrane" — smooth iso-line contours around the
+// vegetated patches. No blocky grid; the marks are on a jittered (non-aligned) grid
+// and the membrane is marching-squares on the field, so both read as organic.
+
+// Static flora positions, regenerated only when the habitat size or field seed changes.
+let flora = null, floraN = 0, floraKey = '';
+function ensureFlora(cw, ch, seed) {
+  const key = cw + 'x' + ch + '@' + seed;
+  if (key === floraKey && flora) return;
+  floraKey = key;
+  const spacing = 15;                                    // ~px between flora
+  const gx = Math.max(1, Math.floor(cw / spacing)), gy = Math.max(1, Math.floor(ch / spacing));
+  floraN = gx * gy;
+  flora = new Float32Array(floraN * 5);                  // x, y, size, tint, kind(0 grass/1 flower)
+  const rng = makeRNG((seed ^ 0x1b56c4e9) >>> 0);
+  const cellW = cw / gx, cellH = ch / gy;
+  let k = 0;
+  for (let j = 0; j < gy; j++) {
+    for (let i = 0; i < gx; i++) {
+      flora[k * 5] = (i + 0.5 + (rng.next() - 0.5) * 1.6) * cellW; // ±0.8 cell jitter → organic, non-grid
+      flora[k * 5 + 1] = (j + 0.5 + (rng.next() - 0.5) * 1.6) * cellH;
+      flora[k * 5 + 2] = 0.8 + rng.next() * 1.3;         // base radius
+      flora[k * 5 + 3] = rng.next() * 2 - 1;             // colour tint
+      flora[k * 5 + 4] = rng.next() < 0.05 ? 1 : 0;      // occasional flower
+      k++;
     }
   }
 }
+
+// Bilinear sample of resource-remaining (F normalized by max capacity) at world (wx,wy).
+function sampleField(F, fnx, fny, Wx, Wy, inv, wx, wy) {
+  const fu = wx / Wx * fnx - 0.5, fv = wy / Wy * fny - 0.5;
+  const ix = Math.floor(fu), iy = Math.floor(fv), rx = fu - ix, ry = fv - iy;
+  const x0 = ((ix % fnx) + fnx) % fnx, x1 = (x0 + 1) % fnx, y0 = ((iy % fny) + fny) % fny, y1 = (y0 + 1) % fny;
+  const a = F[y0 * fnx + x0], b = F[y0 * fnx + x1], c = F[y1 * fnx + x0], d = F[y1 * fnx + x1];
+  return ((a * (1 - rx) + b * rx) * (1 - ry) + (c * (1 - rx) + d * rx) * ry) * inv;
+}
+
+// Marching-squares iso-contour of the (normalized) resource field at level T — the
+// organic "membrane" outlining the vegetated patches. Interior cells only (skips the
+// torus seam), edge-interpolated so the curve is smooth, not stepped.
+function drawMembrane(ctx, F, fnx, fny, Wx, Wy, view, inv, T, style, width) {
+  const { scale, ox, oy } = view;
+  const sx = Wx / fnx, sy = Wy / fny;
+  ctx.strokeStyle = style; ctx.lineWidth = width; ctx.beginPath();
+  for (let gy = 0; gy < fny - 1; gy++) {
+    for (let gx = 0; gx < fnx - 1; gx++) {
+      const v00 = F[gy * fnx + gx] * inv, v10 = F[gy * fnx + gx + 1] * inv;
+      const v11 = F[(gy + 1) * fnx + gx + 1] * inv, v01 = F[(gy + 1) * fnx + gx] * inv;
+      let idx = 0; if (v00 > T) idx |= 1; if (v10 > T) idx |= 2; if (v11 > T) idx |= 4; if (v01 > T) idx |= 8;
+      if (idx === 0 || idx === 15) continue;
+      const bx = (gx + 0.5) * sx, by = (gy + 0.5) * sy;  // cell-centre corner of the marching-squares cell
+      const pts = [];
+      if ((v00 > T) !== (v10 > T)) pts.push([bx + (T - v00) / (v10 - v00) * sx, by]);            // bottom edge
+      if ((v10 > T) !== (v11 > T)) pts.push([bx + sx, by + (T - v10) / (v11 - v10) * sy]);       // right edge
+      if ((v11 > T) !== (v01 > T)) pts.push([bx + sx - (T - v11) / (v01 - v11) * sx, by + sy]);  // top edge
+      if ((v01 > T) !== (v00 > T)) pts.push([bx, by + sy - (T - v01) / (v00 - v01) * sy]);        // left edge
+      for (let p = 0; p + 1 < pts.length; p += 2) {
+        ctx.moveTo(ox + pts[p][0] * scale, oy + pts[p][1] * scale);
+        ctx.lineTo(ox + pts[p + 1][0] * scale, oy + pts[p + 1][1] * scale);
+      }
+    }
+  }
+  ctx.stroke();
+}
+
 function drawField(ctx, state, P, view) {
   const F = state.field, K = state.fieldK, fnx = state.fieldNX, fny = state.fieldNY;
   if (!F) return;
   const cw = ctx.canvas.width, ch = ctx.canvas.height;
-  ensureLichen(cw, ch, state._fieldSeed >>> 0);
+  const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
+  const { scale, ox, oy } = view;
+  ensureFlora(cw, ch, state._fieldSeed >>> 0);
   let kmax = 1e-3;
   for (let c = 0; c < K.length; c++) if (K[c] > kmax) kmax = K[c];
-  const inv = 1 / kmax, data = limg.data, tw = lW, th = lH;
-  for (let ty = 0; ty < th; ty++) {
-    const fv = (ty + 0.5) / th * fny - 0.5, iy = Math.floor(fv), wy = fv - iy;
-    const y0 = ((iy % fny) + fny) % fny, y1 = ((iy + 1) % fny + fny) % fny;
-    for (let tx = 0; tx < tw; tx++) {
-      const fu = (tx + 0.5) / tw * fnx - 0.5, ix = Math.floor(fu), wx = fu - ix;
-      const x0 = ((ix % fnx) + fnx) % fnx, x1 = ((ix + 1) % fnx + fnx) % fnx;
-      const a = F[y0 * fnx + x0], b = F[y0 * fnx + x1], c = F[y1 * fnx + x0], d = F[y1 * fnx + x1];
-      let f = ((a * (1 - wx) + b * wx) * (1 - wy) + (c * (1 - wx) + d * wx) * wy) * inv; // resource remaining, 0..1
-      const i = ty * tw + tx, tint = ltint[i];
-      let inten = lbase[i] * f; if (inten > 1) inten = 1;                                // lichen × resource (eaten → dark)
-      const idx = i * 4;
-      data[idx] = (58 + 26 * tint) * inten + 7;         // olive-green, organic warm/cool tint; stays dim so cells pop
-      data[idx + 1] = (98 - 6 * tint) * inten + 11;
-      data[idx + 2] = (34 + 12 * tint) * inten + 8;
-      data[idx + 3] = 255;
-    }
+  const inv = 1 / kmax;
+
+  // membrane: two nested contours for a little depth (outer boundary + lusher interior)
+  drawMembrane(ctx, F, fnx, fny, Wx, Wy, view, inv, 0.42, 'rgba(122,166,96,0.42)', 1.2);
+  drawMembrane(ctx, F, fnx, fny, Wx, Wy, view, inv, 0.72, 'rgba(150,190,112,0.24)', 0.8);
+
+  // flora marks — kept dim and olive (not the vivid green of the plant particles) so
+  // the living discs read clearly on top; brightness/size follow the local resource.
+  for (let k = 0; k < floraN; k++) {
+    const x = flora[k * 5], y = flora[k * 5 + 1];
+    const v = sampleField(F, fnx, fny, Wx, Wy, inv, x, y);   // resource remaining here, 0..1
+    if (v <= 0.07) continue;                                  // grazed/bare → no flora
+    const tint = flora[k * 5 + 3], size = flora[k * 5 + 2] * (0.4 + 0.7 * v), flower = flora[k * 5 + 4];
+    let r, g, b;
+    if (flower) { r = 150 + 45 * tint; g = 104 + 24 * tint; b = 60; }        // warm flower speck
+    else { r = 58 + 22 * tint; g = 82 + 26 * v; b = 34 + 10 * tint; }        // olive grass/moss, lusher where rich
+    const a = 0.16 + 0.42 * v;
+    ctx.fillStyle = `rgba(${r | 0},${g | 0},${b | 0},${a.toFixed(3)})`;
+    ctx.beginPath();
+    ctx.arc(ox + x * scale, oy + y * scale, size, 0, 6.283185307179586);
+    ctx.fill();
   }
-  lctx.putImageData(limg, 0, 0);
-  const prev = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(lcv, 0, 0, cw, ch);
-  ctx.imageSmoothingEnabled = prev;
 }
 
 export function draw(ctx, state, P, view, opts) {

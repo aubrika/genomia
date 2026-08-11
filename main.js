@@ -537,8 +537,9 @@ function copyHovered() {
 // ---- canvas / view --------------------------------------------------------
 const canvas = $('#canvas');
 const ctx = canvas.getContext('2d', { alpha: false });
-// The world IS the window: a rectangular torus the size of the canvas, drawn 1:1
-// (scale 1, no letterbox), with the UI floating over it. Perception radius R
+// The world is the habitat canvas: a rectangular torus the size of the canvas, drawn
+// 1:1 (scale 1, no letterbox). The canvas occupies the top-left region (the fixed UI
+// panels sit beside and below it, not over it — see style.css). Perception radius R
 // scales with √area, so density depends only on population (window-independent) —
 // every preset stays calibrated at any window size. A resize just "zooms" the
 // running ecosystem: positions, R, and the R-relative genes (dDisp, step) all

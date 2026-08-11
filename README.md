@@ -47,11 +47,12 @@ play, **`.`** to single-step, **R** to reset.
   cap kills the crowded interior, leaving a living shell around a void.
 - **Species bloom** (preset 7) — one founder lineage in a fast-mutating regime with
   a low species threshold, so the species count climbs from 1 as genomes diverge.
-- **Trophic web** (preset 8) — the energy model on, over an organic **lichen** of
-  resource (fractal noise). One lineage of "plants" grazing the lichen evolves a class
-  of "animals" that prey on them: an emergent food chain. Coloured by trophic type
-  (green → red); grazing eats visible dark holes into the lichen; the plant and animal
-  counts are in the top-left readout, and the animal share climbs over time.
+- **Trophic web** (preset 8) — the energy model on, over an organic **flora field**:
+  the resource is drawn as a fairly uniform but organic scatter of grass/moss marks
+  (fractal-noise capacity) ringed by a **membrane** contour. One lineage of "plants"
+  grazing the flora evolves a class of "animals" that prey on them: an emergent food
+  chain. Coloured by trophic type (green → red); grazing thins the flora where the
+  population feeds; the plant and animal counts are in the top-left readout.
 
 **Taxonomy (coarse → fine): lineage > genus > species.** A *lineage* is a founder
 identity — a distinct brush/ruleset. Cells painted with the same brush share a
@@ -84,6 +85,13 @@ read every tick — cost, softness, inheritance/thresholds — applied to all ex
 cells immediately), **new cells** (the brush — only the cells you place next), or
 **on reset** (Initialize — takes effect when you re-seed). Every control and gene
 also has a **hover tooltip** explaining what it does.
+
+## Layout
+
+The habitat is the top-left region; the control panels are fixed beside and below it,
+so they never cover live particles. Resizing the window rescales the running ecosystem
+(positions, `R`, and the `R`-relative genes all scale together) rather than revealing
+more world.
 
 ## Interaction
 
