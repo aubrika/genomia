@@ -20,11 +20,11 @@ export function phenotypeHSL(genome, base, R) {
   return [hue, sat, light];
 }
 
-// Genealogy-tree color: each founder lineage gets a well-separated base hue, and
-// every speciation nudges the child's color a small STEP from its parent's — the
-// step's direction/size derived from the genome change, not a hash. So related
-// species cluster in colour and drift step-wise as a lineage diversifies. Colours
-// are memoised per species on state._spColor (cleared on reset).
+// Genealogy-tree color (memoised per species on state._spColor, cleared on reset).
+// Each founder lineage gets a well-separated base hue. A GENUS split makes a big
+// hue jump, so each genus is a distinct colour family; a species split within a
+// genus makes a clear-but-smaller hue+lightness step. Step direction comes from the
+// genome change (not a hash), so related clades cluster in colour and drift step-wise.
 const PW = [0.9, -0.7, 0.6, -0.5, 0.8, 0.4, -0.6, 0.5, -0.8, 1.0]; // fixed projection weights spread step directions
 export function speciesHSL(state, sp, ranges) {
   const cache = state._spColor;
@@ -38,16 +38,21 @@ export function speciesHSL(state, sp, ranges) {
     const id = chain[k], parent = state.spParent[id];
     if (parent == null || parent < 0) {
       const hue = ((state.spLineage[id] * 137.508) % 360 + 360) % 360; // distinct base per founder lineage
-      cache[id] = [hue, 62, 55];
+      cache[id] = [hue, 64, 55];
     } else {
       const pc = cache[parent];                 // already filled (ancestor, done earlier this pass or previously cached)
       const ref = state.spRef[id], pref = state.spRef[parent];
       let proj = 0;
       for (let g = 0; g < G; g++) proj += ((ref[g] - pref[g]) / (ranges[g][1] - ranges[g][0])) * PW[g];
-      const hue = ((pc[0] + 26 * Math.tanh(proj)) % 360 + 360) % 360;
-      const sat = Math.max(46, Math.min(76, pc[1] + 2));
-      const light = Math.max(38, Math.min(74, pc[2] + (proj >= 0 ? 4 : -4)));
-      cache[id] = [hue, sat, light];
+      const t = Math.tanh(proj);
+      if (state.spBig[id]) {                     // new genus: big hue jump into a fresh colour family
+        const hue = ((pc[0] + (t >= 0 ? 1 : -1) * (80 + 44 * Math.abs(t))) % 360 + 360) % 360;
+        cache[id] = [hue, 64, 56];
+      } else {                                   // species within a genus: clear hue + lightness step
+        const hue = ((pc[0] + 42 * t) % 360 + 360) % 360;
+        const light = Math.max(36, Math.min(78, pc[2] + (t >= 0 ? 8 : -8)));
+        cache[id] = [hue, 64, light];
+      }
     }
   }
   return cache[sp];

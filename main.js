@@ -1,7 +1,7 @@
 // Glue: UI, canvas, interaction, loop, instrumentation. All simulation logic
 // lives in sim.js (DOM-free); this file is the instrument panel around it.
 import {
-  createState, resetState, addAgent, step, computeStats, foundSpecies,
+  createState, resetState, addAgent, step, computeStats, foundClade,
   geneRanges, DEFAULTS, G, GENE, GENE_NAMES,
 } from './sim.js';
 import { draw, phenotypeHSL, hslToRgb } from './render.js';
@@ -33,7 +33,7 @@ const markBrushDirty = () => { brushDirty = true; };
 function brushFounder() {
   if (brushDirty || curSpecies < 0 || curSpecies >= state.nextSpecies) {
     curLineage = state.nextLineage++;
-    curSpecies = foundSpecies(state, brush, 0, curLineage, -1);
+    curSpecies = foundClade(state, brush, 0, curLineage);
     brushDirty = false;
   }
   return { lineage: curLineage, species: curSpecies };
@@ -95,8 +95,10 @@ const HELP = {
   mutation: 'gaussian = each gene is randomly nudged with probability μ. cornered = same, but the four threshold genes (sLo, sHi, bLo, bHi) are also pulled toward the ends of their range, resisting a mushy middle where no structure survives.',
   mu: 'Mutation rate: the per-gene probability that a gene is nudged when an offspring is born.',
   sigmaG: 'Mutation size: the standard deviation of each nudge, as a fraction of that gene’s full range.',
+  macroRate: 'Macromutation rate. Most mutations are small nudges; this fraction are outsized "knockouts" that re-roll a whole gene at random — a big, could-be-good-or-bad jump. Rare large jumps are what leap across the genus threshold and found new genera.',
   kappa: 'Cornered pull strength: how hard threshold genes are pushed toward their range ends (only in "cornered" mutation).',
-  speciesThreshold: 'Species threshold (genetic distance). When an offspring drifts this far from its species’ founding genome, it founds a NEW species within the same lineage. Lower = species split more readily; 0 = never (one species per lineage).',
+  speciesThreshold: 'Species threshold (genetic distance, the FINE tier). When an offspring drifts this far from its species’ founding genome, it founds a new species within the same genus. Lower = species split more readily; 0 = never.',
+  genusThreshold: 'Genus threshold (genetic distance, the COARSE tier). When an offspring drifts this far from its genus’ founding genome, it founds a new genus (and a new species inside it). Set it above the species threshold; genus = the larger colour family, species = the shade within it. 0 = off.',
   isolation: 'Reproductive isolation (genetic distance). With crossover, a second parent must be within this distance of the first, so diverged species stop interbreeding and can drift apart. 0 = off (mate with any neighbour).',
   color: 'phenotype = colour encodes the genome (hue = niche centre, saturation = niche breadth, lightness = motility) — similar genomes look similar. genealogy = each founder lineage gets a distinct base hue and every speciation steps the colour a little, so related species share a colour family and drift step-wise.',
   lines: 'Draw a link between cells that perceive each other. Solid = mutual perception, dashed = one-way (a real consequence of different rScale). Line opacity follows perception strength, so links fade in and out as cells drift.',
@@ -116,7 +118,7 @@ const HELP = {
   sparkPop: 'Living cell count over time.',
   sparkGene: 'Mean ± standard deviation of the selected gene across the whole population.',
   sparkVar: 'Genetic variance index — mean per-gene variance, normalised by range. The headline number: it collapses under blend inheritance and holds steady under crossover.',
-  sparkSpecies: 'Number of distinct surviving species. Rises as genomes diverge past the species threshold and falls as species go extinct. The founder-lineage count is shown in the top-left readout.',
+  sparkSpecies: 'Number of distinct surviving species (the fine tier). Rises as genomes diverge past the species threshold and falls as species go extinct. Founder-lineage and genus counts are in the top-left readout.',
 };
 
 const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Motile swarm', 'Allee frontier', 'Membranes', 'Species bloom'];
@@ -126,12 +128,24 @@ const PRESET_TIPS = [
   'Blend collapse — blend inheritance averages parents, halving genetic variance each generation. Watch the variance-index sparkline fall off a cliff and the colours wash out.',
   'Motile swarm — high motility and positive taxis: cells steer toward crowding and self-organise into moving clumps without any birth/death tuning.',
   'Allee frontier — high loneliness threshold and short dispersal make slow, pushed expansion fronts and strong clade structure (switch to genealogy colouring to see the founder clumps).',
-  'Membranes (experimental) — cells aggregate into clumps, but a low overcrowding cap kills the crowded interior, leaving a living shell around a hollow void: rings and walls. A best-guess at emergent “cell membranes”.',
+  'Membranes (experimental) — cells aggregate, but a low overcrowding cap thins the crowded interior, and a HIGH niche-breadth cost (kTol) stops that cap from evolving upward — so clumps stay loose and partly hollow instead of filling in over time. A best-guess at emergent “cell membranes”; true hollow rings are hard here because density and crowding-tolerance are coupled.',
   'Species bloom — one founder lineage in a fast, mutating regime with a low species threshold, so genomes keep diverging past it and the species count climbs from 1. Switch to genealogy colouring to watch the palette fracture into a family tree.',
 ];
 
 // ---- side panel -----------------------------------------------------------
-function section(title, kids) { return el('section', {}, [el('h2', {}, [title]), ...kids]); }
+// scope badge: makes it obvious whether a section's controls apply live to every
+// existing cell, only to cells you place next, or on the next reset.
+const SCOPE = {
+  live: ['live', 'Applies to every existing cell immediately — these are global rules read each tick.'],
+  neu: ['new cells', 'Sets the genome of cells you place next. Existing cells keep their own genes.'],
+  reset: ['on reset', 'Takes effect only when you re-seed (Apply init / Reset / a preset).'],
+  view: ['view', 'Changes the display only; it does not affect the simulation.'],
+};
+function section(title, kids, scope) {
+  const h = el('h2', {}, [title]);
+  if (scope) { const [lbl, tip] = SCOPE[scope]; h.append(withTip(el('span', { class: 'scope ' + scope }, [lbl]), tip)); }
+  return el('section', {}, [h, ...kids]);
+}
 
 function buildSide() {
   const side = $('#side');
@@ -161,7 +175,7 @@ function buildSide() {
     slider('softness σ', 0, 2, 0.05, () => P.sigma, (v) => P.sigma = v, f2, HELP.sigma),
     el('div', { class: 'row' }, [ageBtn]),
     slider('max age', 50, 2000, 10, () => P.maxAge, (v) => P.maxAge = v, (v) => v.toFixed(0), HELP.maxAge),
-  ]));
+  ], 'live'));
 
   // Costs
   const costToggle = button(P.costsOn ? 'costs ON' : 'costs OFF', () => {
@@ -173,7 +187,7 @@ function buildSide() {
     slider('kSense', 0, 2, 0.05, () => P.kSense, (v) => P.kSense = v, f2, HELP.kSense),
     slider('kTol', 0, 2, 0.05, () => P.kTol, (v) => P.kTol = v, f2, HELP.kTol),
     slider('kTaxis', 0, 2, 0.05, () => P.kTaxis, (v) => P.kTaxis = v, f2, HELP.kTaxis),
-  ]));
+  ], 'live'));
 
   // Inheritance
   side.append(section('Inheritance', [
@@ -181,10 +195,12 @@ function buildSide() {
     ctrlSelect('mutation', [['gaussian', 'gaussian'], ['cornered', 'cornered']], P.mutation, (v) => P.mutation = v, HELP.mutation),
     slider('rate μ', 0, 0.5, 0.01, () => P.mu, (v) => P.mu = v, f2, HELP.mu),
     slider('σ_g', 0, 0.3, 0.005, () => P.sigmaG, (v) => P.sigmaG = v, (v) => v.toFixed(3), HELP.sigmaG),
+    slider('macro', 0, 0.5, 0.01, () => P.macroRate, (v) => P.macroRate = v, (v) => v.toFixed(2), HELP.macroRate),
     slider('corner κ', 0, 0.5, 0.01, () => P.kappa, (v) => P.kappa = v, f2, HELP.kappa),
+    slider('genus Δ', 0, 0.6, 0.005, () => P.genusThreshold, (v) => P.genusThreshold = v, (v) => v.toFixed(3), HELP.genusThreshold),
     slider('species Δ', 0, 0.4, 0.005, () => P.speciesThreshold, (v) => P.speciesThreshold = v, (v) => v.toFixed(3), HELP.speciesThreshold),
     slider('isolation', 0, 0.4, 0.005, () => P.isolation, (v) => P.isolation = v, (v) => v.toFixed(3), HELP.isolation),
-  ]));
+  ], 'live'));
 
   // Rendering
   const linesBtn = button(ui.showLines ? 'lines ON' : 'lines OFF', () => {
@@ -193,7 +209,7 @@ function buildSide() {
   side.append(section('Rendering', [
     ctrlSelect('color', [['phenotype', 'phenotype'], ['lineage', 'genealogy']], ui.colorMode, (v) => ui.colorMode = v, HELP.color),
     el('div', { class: 'row' }, [linesBtn]),
-  ]));
+  ], 'view'));
 
   // Brush genome
   const rr = geneR();
@@ -206,7 +222,7 @@ function buildSide() {
     ...geneRows,
     el('div', { class: 'grid2' }, [button('randomize', randomizeBrush, '', HELP.randomize), button('copy hovered', copyHovered, '', HELP.copyHovered)]),
     el('p', { class: 'hint' }, ['click place · drag paint · shift-click blob · alt-drag erase · hover reads genome']),
-  ]));
+  ], 'neu'));
 
   // Initialize
   side.append(section('Initialize', [
@@ -215,12 +231,12 @@ function buildSide() {
     ctrlSelect('genome', [['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B']], init.genomeInit, (v) => init.genomeInit = v, HELP.genomeInit),
     slider('spread', 0, 0.15, 0.005, () => init.spread, (v) => init.spread = v, (v) => v.toFixed(3), HELP.spread),
     button('apply init', applyInit, '', HELP.applyInit),
-  ]));
+  ], 'reset'));
 
   side.append(section('Blob brush', [
     slider('N', 2, 400, 1, () => init.blobN, (v) => init.blobN = v, (v) => v.toFixed(0), HELP.blobN),
     slider('jitter', 2, 120, 1, () => init.blobJitter, (v) => init.blobJitter = v, (v) => v.toFixed(0), HELP.blobJitter),
-  ]));
+  ], 'neu'));
 }
 
 // ---- bottom sparklines ----------------------------------------------------
@@ -300,8 +316,8 @@ function applyInit() {
     const A = new Float32Array(brush), B = new Float32Array(brush);
     B[GENE.sLo] += 1.6; B[GENE.sHi] += 1.6; B[GENE.bLo] += 1.6; B[GENE.bHi] += 1.6;
     B[GENE.step] = Math.min(rr[GENE.step][1], B[GENE.step] * 1.8);
-    const linA = state.nextLineage++, spA = foundSpecies(state, A, 0, linA, -1);
-    const linB = state.nextLineage++, spB = foundSpecies(state, B, 0, linB, -1);
+    const linA = state.nextLineage++, spA = foundClade(state, A, 0, linA);
+    const linB = state.nextLineage++, spB = foundClade(state, B, 0, linB);
     curLineage = linA; curSpecies = spA; brushDirty = false;
     const half = n >> 1, jr = Dm * 0.12;
     for (let i = 0; i < n; i++) {
@@ -316,7 +332,7 @@ function applyInit() {
     // 'clone brush' seeds ONE founder lineage/species (same rules => one lineage);
     // 'uniform random' gives each cell its own founder (all different rules).
     let lin = null, sp = null;
-    if (!isUniform) { lin = state.nextLineage++; sp = foundSpecies(state, brush, 0, lin, -1); curLineage = lin; curSpecies = sp; brushDirty = false; }
+    if (!isUniform) { lin = state.nextLineage++; sp = foundClade(state, brush, 0, lin); curLineage = lin; curSpecies = sp; brushDirty = false; }
     const genomeOf = () => {
       if (isUniform) { const g = new Float32Array(G); for (let j = 0; j < G; j++) g[j] = rng.range(rr[j][0], rr[j][1]); return g; }
       return jitter(new Float32Array(brush));
@@ -372,25 +388,29 @@ const PRESETS = [
     P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian' },
     init: { layout: 'blob', genomeInit: 'brush', population: 8000 },
   },
-  { // Membranes (experimental) — aggregate (positive taxis, short dispersal) into
-    // clumps, but a low overcrowding cap (sHi) kills the crowded interior, so cells
-    // survive only in a shell at the clump's edge: hollow rings/walls around voids.
-    // Best-guess at emergent "cell membranes".
-    brush: { rScale: 1.0, sLo: 0.6, sHi: 2.8, bLo: 0.9, bHi: 2.3, fec: 0.22, dDisp: 0.7, dCV: 0.3, step: 0.05, taxis: 0.55 },
-    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', sigma: 0.4 },
+    { // Membranes (experimental) — aggregate (positive taxis, short dispersal), but a
+    // low overcrowding cap (sHi) kills the crowded interior, leaving a thin shell
+    // around a void. Crucially, a HIGH kTol penalises widening the survival band, so
+    // sHi can't evolve upward and re-fill the centres — the hollows persist over time.
+    brush: { rScale: 1.0, sLo: 0.6, sHi: 2.6, bLo: 0.9, bHi: 2.2, fec: 0.24, dDisp: 0.6, dCV: 0.3, step: 0.05, taxis: 0.8 },
+    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', sigma: 0.4, macroRate: 0.02, kTol: 1.0 },
     init: { layout: 'uniform', genomeInit: 'brush', population: 6000, spread: 0.03 },
   },
   { // Species bloom — one founder lineage (clone brush) in a fast, mutating regime
     // with a low species threshold, so genomes keep diverging past it and the
     // species count climbs from 1 (a family tree unfurling under genealogy colour).
     brush: { rScale: 1.0, sLo: 0.6, sHi: 4.0, bLo: 1.0, bHi: 2.6, fec: 0.24, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10 },
-    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', mu: 0.25, sigmaG: 0.07, speciesThreshold: 0.09 },
+    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', mu: 0.25, sigmaG: 0.07, macroRate: 0.08, speciesThreshold: 0.09, genusThreshold: 0.34 },
     init: { layout: 'uniform', genomeInit: 'brush', population: 4000, spread: 0.02 },
   },
 ];
 function applyPreset(i) {
   const pr = PRESETS[i];
-  Object.assign(P, { sigma: DEFAULTS.sigma, speciesThreshold: DEFAULTS.speciesThreshold, isolation: DEFAULTS.isolation, mu: DEFAULTS.mu, sigmaG: DEFAULTS.sigmaG }, pr.P);  // reset varied params unless the preset sets them
+  Object.assign(P, {
+    sigma: DEFAULTS.sigma, genusThreshold: DEFAULTS.genusThreshold, speciesThreshold: DEFAULTS.speciesThreshold,
+    isolation: DEFAULTS.isolation, mu: DEFAULTS.mu, sigmaG: DEFAULTS.sigmaG, macroRate: DEFAULTS.macroRate,
+    kMove: DEFAULTS.kMove, kSense: DEFAULTS.kSense, kTol: DEFAULTS.kTol, kTaxis: DEFAULTS.kTaxis,
+  }, pr.P);  // reset varied params to defaults unless the preset sets them
   setBrush(pr.brush);
   Object.assign(init, pr.init);
   buildSide();
@@ -532,7 +552,7 @@ function frame(t) {
   if (ui.playing) pushHist(s);
   drawSparks(s);
   fpsN++; if (t - fpsT > 500) { fps = Math.round(fpsN * 1000 / (t - fpsT)); fpsN = 0; fpsT = t; }
-  $('#hud').innerHTML = `tick <b>${state.tick}</b> · pop <b>${state.count}</b> · lineages <b>${s.lineages}</b> · ${fps} fps${ui.playing ? '' : ' · <b>paused</b>'}`;
+  $('#hud').innerHTML = `tick <b>${state.tick}</b> · pop <b>${state.count}</b> · lineages <b>${s.lineages}</b> · genera <b>${s.genera}</b> · ${fps} fps${ui.playing ? '' : ' · <b>paused</b>'}`;
   requestAnimationFrame(frame);
 }
 

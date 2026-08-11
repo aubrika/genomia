@@ -40,15 +40,25 @@ play, **`.`** to single-step, **R** to reset.
 - **Species bloom** (preset 7) — one founder lineage in a fast-mutating regime with
   a low species threshold, so the species count climbs from 1 as genomes diverge.
 
-**Lineage vs species.** A *lineage* is a founder identity — a distinct brush/ruleset.
-Cells painted with the same brush share a lineage; edit a gene and the next cells you
-paint found a new one. Lineage is inherited unchanged forever. A *species* is a
-divergence-based subdivision *within* a lineage: when an offspring's genome drifts
-past the **species Δ** (a genetic-distance threshold) from its species' founding
-genome, it founds a new species. **isolation** (also a genetic-distance cutoff)
-optionally stops diverged species from interbreeding under crossover.
+**Taxonomy (coarse → fine): lineage > genus > species.** A *lineage* is a founder
+identity — a distinct brush/ruleset. Cells painted with the same brush share a
+lineage; edit a gene and the next cells you paint found a new one; it's inherited
+unchanged forever. A *genus* and a *species* are divergence tiers *within* a lineage:
+when an offspring's genome drifts past the **genus Δ** / **species Δ** genetic-distance
+threshold from that tier's founding genome, it founds a new genus / species. Under
+**genealogy** color, genus is the hue family and species is the shade within it.
+**isolation** (a genetic-distance cutoff) optionally stops diverged clades from
+interbreeding under crossover.
 
-Every control and gene has a **hover tooltip** explaining what it does.
+**Mutation.** Most mutations are small nudges (`σ_g`); a **macro** fraction are
+outsized "knockouts" that re-roll a whole gene — big, could-be-good-or-bad jumps.
+Rare macromutations are what leap across the genus threshold to found new genera.
+
+**Which controls apply when.** Each panel section is badged: **live** (global rules
+read every tick — cost, softness, inheritance/thresholds — applied to all existing
+cells immediately), **new cells** (the brush — only the cells you place next), or
+**on reset** (Initialize — takes effect when you re-seed). Every control and gene
+also has a **hover tooltip** explaining what it does.
 
 ## Interaction
 

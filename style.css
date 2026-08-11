@@ -43,7 +43,12 @@ html, body { height: 100%; margin: 0; background: var(--ground); color: var(--in
 
 /* side panel */
 section { border-bottom: 1px solid var(--divider); padding: 16px 18px; }
-section > h2 { font-family: var(--sans); font-weight: 600; font-size: 18px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+section > h2 { font-family: var(--sans); font-weight: 600; font-size: 18px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; display: flex; align-items: baseline; gap: 8px; }
+.scope { font-family: var(--mono); font-weight: 500; font-size: 12px; letter-spacing: 0.04em; text-transform: none; padding: 2px 7px; border-radius: 10px; border: 1px solid var(--divider); cursor: help; }
+.scope.live { color: var(--accent); border-color: rgba(201,135,58,0.5); }
+.scope.neu { color: #7FA6B8; border-color: rgba(127,166,184,0.45); }
+.scope.reset { color: var(--muted); }
+.scope.view { color: var(--muted); }
 .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
 .row.wrap { flex-wrap: wrap; }
 

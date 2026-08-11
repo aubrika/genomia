@@ -35,9 +35,13 @@ export const DEFAULTS = {
   world: 1000, R: 17, sigma: 0.6,
   costsOn: true, kMove: 0.4, kSense: 0.3, kTol: 0.5, kTaxis: 0.2,
   recomb: 'crossover', mutation: 'gaussian', mu: 0.1, sigmaG: 0.05, kappa: 0.15,
-  // Lineage = founder identity (which brush); inherited unchanged forever.
-  // Species = divergence-based subdivisions within a lineage.
-  speciesThreshold: 0.16, // genetic distance from a species' founding genome at which an offspring founds a NEW species (same lineage). 0 = off.
+  macroRate: 0.05,        // fraction of mutations that are outsized "knockouts" (re-roll the whole gene) rather than small nudges
+
+  // Taxonomy, coarse -> fine: lineage (founder identity, inherited unchanged) >
+  // genus (coarse divergence tier) > species (fine divergence tier). Both tiers are
+  // divergence thresholds on genetic distance from the tier's founding genome.
+  genusThreshold: 0.30,   // distance from a genus' founding genome at which an offspring founds a NEW genus. 0 = off.
+  speciesThreshold: 0.16, // distance from a species' founding genome at which an offspring founds a NEW species. 0 = off.
   isolation: 0,           // reproductive isolation: a crossover mate must be within this genetic distance. 0 = off (mate with any neighbor).
   maxAgeOn: false, maxAge: 400,
   cap: 12000,
@@ -51,14 +55,33 @@ function geneDist(A, ao, B, bo, ranges) {
   return Math.sqrt(s / G);
 }
 
-// Register a new species: records its founding genome, founder lineage, and parent
-// species (-1 for a founder). Genealogy only — never read by the dynamics.
-export function foundSpecies(state, genome, off, lineageId, parent) {
-  const id = state.nextSpecies++;
+function copyGenome(genome, off) {
   const ref = new Float32Array(G);
   for (let g = 0; g < G; g++) ref[g] = genome[off + g];
-  state.spRef[id] = ref; state.spLineage[id] = lineageId; state.spParent[id] = parent;
+  return ref;
+}
+
+// Register a new genus (coarse tier). parent = -1 for a founder.
+export function foundGenus(state, genome, off, lineageId, parent) {
+  const id = state.nextGenus++;
+  state.gRef[id] = copyGenome(genome, off); state.gLineage[id] = lineageId; state.gParent[id] = parent;
   return id;
+}
+
+// Register a new species (fine tier). `genus` is its containing genus; `big` marks
+// species that also founded a new genus (a large colour step). Genealogy only.
+export function foundSpecies(state, genome, off, lineageId, parent, genus, big) {
+  const id = state.nextSpecies++;
+  state.spRef[id] = copyGenome(genome, off);
+  state.spLineage[id] = lineageId; state.spParent[id] = parent; state.spGenus[id] = genus; state.spBig[id] = big ? 1 : 0;
+  return id;
+}
+
+// Found a fresh clade (genus + species) from one genome — for hand-placed cells /
+// brush founders. Returns the species id (its genus is state.spGenus[id]).
+export function foundClade(state, genome, off, lineageId) {
+  const g = foundGenus(state, genome, off, lineageId, -1);
+  return foundSpecies(state, genome, off, lineageId, -1, g, true);
 }
 
 function smoothstep(a, b, x) {
@@ -81,8 +104,9 @@ export function createState(cap) {
     age: new Float32Array(cap), lineage: new Int32Array(cap),
     genome: new Float32Array(cap * G),
     species: new Int32Array(cap),
-    // species registry (grows with divergence): founding genome, parent species, founder lineage
-    spRef: [], spParent: [], spLineage: [], nextSpecies: 0,
+    // divergence registries (grow): species (fine) and genus (coarse) tiers
+    spRef: [], spParent: [], spLineage: [], spGenus: [], spBig: [], nextSpecies: 0,
+    gRef: [], gParent: [], gLineage: [], nextGenus: 0,
     _spColor: [],   // renderer-owned color cache, keyed by species id; cleared on reset
     rng: makeRNG(1),
     _scratch: null, _rangesR: -1, _ranges: null,
@@ -91,7 +115,9 @@ export function createState(cap) {
 
 export function resetState(state, seed) {
   state.count = 0; state.tick = 0; state.nextLineage = 1;
-  state.spRef = []; state.spParent = []; state.spLineage = []; state.nextSpecies = 0; state._spColor = [];
+  state.spRef = []; state.spParent = []; state.spLineage = []; state.spGenus = []; state.spBig = []; state.nextSpecies = 0;
+  state.gRef = []; state.gParent = []; state.gLineage = []; state.nextGenus = 0;
+  state._spColor = [];
   state.rng = makeRNG(seed >>> 0);
 }
 
@@ -121,7 +147,7 @@ export function addAgent(state, x, y, genomeArr, lineageId, ranges, speciesId) {
   const base = i * G;
   for (let g = 0; g < G; g++) state.genome[base + g] = genomeArr[g];
   clampGene(state.genome, base, ranges);
-  state.species[i] = speciesId != null ? speciesId : foundSpecies(state, state.genome, base, state.lineage[i], -1);
+  state.species[i] = speciesId != null ? speciesId : foundClade(state, state.genome, base, state.lineage[i]);
   return i;
 }
 
@@ -178,9 +204,15 @@ function pickSecondParent(state, i, rng, counts, items, cellIdx, nx, ny, Wx, Wy,
 }
 
 function mutate(bg, off, rng, P, rr) {
-  const mu = P.mu, sg = P.sigmaG;
+  const mu = P.mu, sg = P.sigmaG, macro = P.macroRate;
   for (let g = 0; g < G; g++) {
-    if (rng.next() < mu) bg[off + g] += rng.gauss() * sg * (rr[g][1] - rr[g][0]);
+    if (rng.next() < mu) {
+      // Most mutations are small nudges; a `macroRate` fraction are outsized
+      // "knockouts" that re-roll the whole gene — a large, could-be-good-or-bad
+      // jump that can leap across the genus threshold in a single birth.
+      if (macro > 0 && rng.next() < macro) bg[off + g] = rr[g][0] + (rr[g][1] - rr[g][0]) * rng.next();
+      else bg[off + g] += rng.gauss() * sg * (rr[g][1] - rr[g][0]);
+    }
   }
   if (P.mutation === 'cornered') {
     const k = P.kappa;
@@ -290,7 +322,7 @@ export function step(state, P) {
   // 4. Birth — survivors inside the (soft) birth band emit one offspring at f_eff.
   let bc = 0;
   const bx = s.bx, by = s.by, bg = s.bg, bl = s.bl, bspecies = s.bspecies;
-  const spThr = P.speciesThreshold;
+  const spThr = P.speciesThreshold, gThr = P.genusThreshold;
   for (let i = 0; i < N; i++) {
     if (!survive[i]) continue;
     const base = i * G, ni = n[i];
@@ -313,11 +345,21 @@ export function step(state, P) {
     bx[bc] = wrap(X[i] + Math.cos(ang) * dist, Wx);
     by[bc] = wrap(Y[i] + Math.sin(ang) * dist, Wy);
     bl[bc] = LIN[i];                       // lineage (founder) is inherited unchanged
-    // species: if the offspring has drifted past the threshold from its species'
-    // founding genome, it founds a new species within the same lineage.
-    const psp = SPE[i];
-    bspecies[bc] = (spThr > 0 && geneDist(bg, bc * G, state.spRef[psp], 0, rr) > spThr)
-      ? foundSpecies(state, bg, bc * G, LIN[i], psp) : psp;
+    // Divergence taxonomy, coarse first: past the genus threshold => new genus (and a
+    // new species inside it, marked as a big colour step); else past the species
+    // threshold => new species in the same genus; else inherit both.
+    const psp = SPE[i], off = bc * G;
+    let osp = psp;
+    if (spThr > 0) {
+      const pg = state.spGenus[psp];
+      if (gThr > 0 && geneDist(bg, off, state.gRef[pg], 0, rr) > gThr) {
+        const ng = foundGenus(state, bg, off, LIN[i], pg);
+        osp = foundSpecies(state, bg, off, LIN[i], psp, ng, true);
+      } else if (geneDist(bg, off, state.spRef[psp], 0, rr) > spThr) {
+        osp = foundSpecies(state, bg, off, LIN[i], psp, pg, false);
+      }
+    }
+    bspecies[bc] = osp;
     bc++;
   }
 
@@ -374,7 +416,7 @@ export function computeStats(state, P) {
     vi += v / (rg * rg);
   }
   vi /= G;
-  const seen = new Set(), spSeen = new Set();
-  for (let i = 0; i < N; i++) { seen.add(state.lineage[i]); spSeen.add(state.species[i]); }
-  return { population: N, mean, sd, varianceIndex: vi, lineages: seen.size, species: spSeen.size };
+  const seen = new Set(), spSeen = new Set(), gSeen = new Set();
+  for (let i = 0; i < N; i++) { const sp = state.species[i]; seen.add(state.lineage[i]); spSeen.add(sp); gSeen.add(state.spGenus[sp]); }
+  return { population: N, mean, sd, varianceIndex: vi, lineages: seen.size, species: spSeen.size, genera: gSeen.size };
 }
