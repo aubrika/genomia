@@ -42,8 +42,8 @@ export const DEFAULTS = {
   // Taxonomy, coarse -> fine: lineage (founder identity, inherited unchanged) >
   // genus (coarse divergence tier) > species (fine divergence tier). Both tiers are
   // divergence thresholds on genetic distance from the tier's founding genome.
-  genusThreshold: 0.30,   // distance from a genus' founding genome at which an offspring founds a NEW genus. 0 = off.
-  speciesThreshold: 0.16, // distance from a species' founding genome at which an offspring founds a NEW species. 0 = off.
+  genusThreshold: 0.55,   // distance from a genus' founding genome at which an offspring founds a NEW genus. 0 = off.
+  speciesThreshold: 0.30, // distance from a species' founding genome at which an offspring founds a NEW species. 0 = off.
   isolation: 0,           // reproductive isolation: a crossover mate must be within this genetic distance. 0 = off (mate with any neighbor).
   maxAgeOn: false, maxAge: 400,
 
@@ -149,10 +149,34 @@ export function resetState(state, seed) {
   state.rng = makeRNG(seed >>> 0);
 }
 
-// Build the resource field: a smooth noise capacity map (bilinear value noise from a
-// coarse random lattice) plus a current level initialized to capacity. Deterministic
-// in its own seed so it never disturbs the main simulation RNG sequence. Rebuilt when
-// the world resizes or the seed changes.
+// Fractal (Perlin-like) value noise on a torus: several octaves of wrapped random
+// lattices, each smoothstep-interpolated, summed with falling amplitude. Returns a
+// sampler over [0,1)² so both the ecology field and the renderer can share the look.
+export function makeFractalNoise(seed, octaves) {
+  const rng = makeRNG(seed >>> 0);
+  const lat = octaves.map((o) => { const g = new Float32Array(o.L * o.L); for (let i = 0; i < g.length; i++) g[i] = rng.next(); return g; });
+  const smooth = (t) => t * t * (3 - 2 * t);
+  let ampSum = 0; for (const o of octaves) ampSum += o.a;
+  return (gx, gy) => {                                  // gx,gy in [0,1)
+    let sum = 0;
+    for (let o = 0; o < octaves.length; o++) {
+      const L = octaves[o].L, a = octaves[o].a, g = lat[o];
+      const u = gx * L, v = gy * L;
+      const ix = Math.floor(u), iy = Math.floor(v);
+      const fx = smooth(u - ix), fy = smooth(v - iy);
+      const x0 = ((ix % L) + L) % L, y0 = ((iy % L) + L) % L, x1 = (x0 + 1) % L, y1 = (y0 + 1) % L;
+      const A = g[y0 * L + x0], B = g[y0 * L + x1], C = g[y1 * L + x0], D = g[y1 * L + x1];
+      sum += a * ((A * (1 - fx) + B * fx) * (1 - fy) + (C * (1 - fx) + D * fx) * fy);
+    }
+    return sum / ampSum;                                // ~[0,1]
+  };
+}
+
+// Build the resource field: a fractal-noise capacity map (organic, lichen-like patches
+// at several scales) whose MEAN is normalized to 1 — so the world's carrying capacity
+// is unchanged by the noise pattern — plus a current level initialized to capacity.
+// Deterministic in its own seed, so it never disturbs the main simulation RNG sequence.
+// Rebuilt when the world resizes or the seed changes.
 export function buildField(state, P) {
   const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
   const seed = (P.fieldSeed != null ? P.fieldSeed : 12345) >>> 0;
@@ -160,25 +184,20 @@ export function buildField(state, P) {
   const nx = Math.max(4, P.fieldRes | 0), ny = Math.max(4, Math.round(nx * Wy / Wx));
   const nc = nx * ny;
   const field = new Float32Array(nc), K = new Float32Array(nc);
-  const rng = makeRNG(seed ^ 0x9e3779b9);
-  // coarse control lattice, wrapped (torus), smoothed by bilinear interpolation
-  const cx = 6, cy = 6, ctrl = new Float32Array(cx * cy);
-  for (let i = 0; i < ctrl.length; i++) ctrl[i] = rng.next();
+  const noise = makeFractalNoise(seed ^ 0x9e3779b9, [{ L: 3, a: 1 }, { L: 6, a: 0.55 }, { L: 12, a: 0.3 }]);
   const contrast = P.fieldContrast;
-  const smooth = (t) => t * t * (3 - 2 * t);
+  let mean = 0;
   for (let gy = 0; gy < ny; gy++) {
     for (let gx = 0; gx < nx; gx++) {
-      const u = gx / nx * cx, v = gy / ny * cy;
-      const x0 = Math.floor(u), y0 = Math.floor(v);
-      const fx = smooth(u - x0), fy = smooth(v - y0);
-      const x1 = (x0 + 1) % cx, y1 = (y0 + 1) % cy, xa = x0 % cx, ya = y0 % cy;
-      const a = ctrl[ya * cx + xa], b = ctrl[ya * cx + x1], c = ctrl[y1 * cx + xa], d = ctrl[y1 * cx + x1];
-      const noise = (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy; // ~[0,1]
-      const k = 1 + contrast * (noise * 2 - 1);        // capacity in ~[1-contrast, 1+contrast]
-      const c2 = gy * nx + gx;
-      K[c2] = k < 0.02 ? 0.02 : k; field[c2] = K[c2];
+      let nz = noise(gx / nx, gy / ny);
+      nz = nz * nz * (3 - 2 * nz);                     // gentle smoothstep -> more distinct lichen blotches
+      let k = 1 + contrast * (nz * 2 - 1);
+      if (k < 0.02) k = 0.02;
+      const c = gy * nx + gx; K[c] = k; mean += k;
     }
   }
+  mean /= nc;
+  for (let c = 0; c < nc; c++) { K[c] /= mean; field[c] = K[c]; } // normalize mean capacity to 1
   state.field = field; state.fieldK = K; state.fieldNX = nx; state.fieldNY = ny;
   state._fieldW = Wx; state._fieldH = Wy; state._fieldSeed = seed;
 }

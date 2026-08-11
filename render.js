@@ -2,7 +2,7 @@
 // semantic (similar genomes look similar); adjacency lines show that "touching"
 // in continuous space is a continuous quantity. Kept separate from sim.js.
 
-import { G, GENE, geneRanges } from './sim.js';
+import { G, GENE, geneRanges, makeFractalNoise } from './sim.js';
 
 // --- color -----------------------------------------------------------------
 // Phenotype: hue=niche center, saturation=niche breadth, lightness=motility.
@@ -101,24 +101,62 @@ function ensurePairs(need) {
 
 const GROUND = '#12100E';
 
-// The resource field, drawn as a faint olive heatmap under everything so the
-// noise-generated gradient the autotrophs feed on is visible.
+// The resource field, drawn as an organic "lichen": a fine static fractal-noise
+// texture (mottled growth) modulated by the live resource level, then bilinearly
+// smoothed up to the canvas. Where cells graze, the resource drops and the lichen
+// goes dark — so you literally watch the population eat holes into it. The texture is
+// decoupled from the coarse ecology grid, so it looks fine-grained without changing
+// carrying capacity. Cached; rebuilt only when the canvas size or field seed changes.
+let lcv = null, lctx = null, limg = null, lbase = null, ltint = null, lW = 0, lH = 0, lKey = '';
+function ensureLichen(cw, ch, seed) {
+  const tw = Math.max(64, Math.min(220, Math.round(cw / 5)));
+  const th = Math.max(48, Math.round(tw * ch / cw));
+  const key = tw + 'x' + th + '@' + seed;
+  if (key === lKey && lbase) return;
+  lKey = key; lW = tw; lH = th;
+  lcv = document.createElement('canvas'); lcv.width = tw; lcv.height = th;
+  lctx = lcv.getContext('2d'); limg = lctx.createImageData(tw, th);
+  lbase = new Float32Array(tw * th); ltint = new Float32Array(tw * th);
+  const mott = makeFractalNoise((seed ^ 0x5bd1e995) >>> 0, [{ L: 8, a: 1 }, { L: 16, a: 0.6 }, { L: 32, a: 0.35 }, { L: 64, a: 0.2 }]);
+  const tnt = makeFractalNoise((seed ^ 0xa136aaad) >>> 0, [{ L: 4, a: 1 }, { L: 8, a: 0.5 }]);
+  for (let y = 0; y < th; y++) {
+    for (let x = 0; x < tw; x++) {
+      const m = Math.pow(mott(x / tw, y / th), 1.4);   // sharpen → mottled, with bare specks
+      const i = y * tw + x;
+      lbase[i] = 0.32 + 0.68 * m;                       // texture multiplier ~[0.32,1]
+      ltint[i] = tnt(x / tw, y / th) * 2 - 1;           // warm/cool colour variation [-1,1]
+    }
+  }
+}
 function drawField(ctx, state, P, view) {
   const F = state.field, K = state.fieldK, fnx = state.fieldNX, fny = state.fieldNY;
   if (!F) return;
-  const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
-  const { scale, ox, oy } = view;
-  const sx = Wx / fnx * scale, sy = Wy / fny * scale;
+  const cw = ctx.canvas.width, ch = ctx.canvas.height;
+  ensureLichen(cw, ch, state._fieldSeed >>> 0);
   let kmax = 1e-3;
   for (let c = 0; c < K.length; c++) if (K[c] > kmax) kmax = K[c];
-  for (let gy = 0; gy < fny; gy++) {
-    for (let gx = 0; gx < fnx; gx++) {
-      const v = F[gy * fnx + gx] / kmax;
-      if (v <= 0.02) continue;
-      ctx.fillStyle = `rgba(86,140,74,${(0.04 + 0.17 * (v < 1 ? v : 1)).toFixed(3)})`;
-      ctx.fillRect(ox + gx * sx, oy + gy * sy, sx + 1, sy + 1);
+  const inv = 1 / kmax, data = limg.data, tw = lW, th = lH;
+  for (let ty = 0; ty < th; ty++) {
+    const fv = (ty + 0.5) / th * fny - 0.5, iy = Math.floor(fv), wy = fv - iy;
+    const y0 = ((iy % fny) + fny) % fny, y1 = ((iy + 1) % fny + fny) % fny;
+    for (let tx = 0; tx < tw; tx++) {
+      const fu = (tx + 0.5) / tw * fnx - 0.5, ix = Math.floor(fu), wx = fu - ix;
+      const x0 = ((ix % fnx) + fnx) % fnx, x1 = ((ix + 1) % fnx + fnx) % fnx;
+      const a = F[y0 * fnx + x0], b = F[y0 * fnx + x1], c = F[y1 * fnx + x0], d = F[y1 * fnx + x1];
+      let f = ((a * (1 - wx) + b * wx) * (1 - wy) + (c * (1 - wx) + d * wx) * wy) * inv; // resource remaining, 0..1
+      const i = ty * tw + tx, tint = ltint[i];
+      let inten = lbase[i] * f; if (inten > 1) inten = 1;                                // lichen × resource (eaten → dark)
+      const idx = i * 4;
+      data[idx] = (58 + 26 * tint) * inten + 7;         // olive-green, organic warm/cool tint; stays dim so cells pop
+      data[idx + 1] = (98 - 6 * tint) * inten + 11;
+      data[idx + 2] = (34 + 12 * tint) * inten + 8;
+      data[idx + 3] = 255;
     }
   }
+  lctx.putImageData(limg, 0, 0);
+  const prev = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(lcv, 0, 0, cw, ch);
+  ctx.imageSmoothingEnabled = prev;
 }
 
 export function draw(ctx, state, P, view, opts) {

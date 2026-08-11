@@ -227,8 +227,8 @@ function buildSide() {
     slider('σ_g', 0, 0.3, 0.005, () => P.sigmaG, (v) => P.sigmaG = v, (v) => v.toFixed(3), HELP.sigmaG),
     slider('macro', 0, 0.5, 0.01, () => P.macroRate, (v) => P.macroRate = v, (v) => v.toFixed(2), HELP.macroRate),
     slider('corner κ', 0, 0.5, 0.01, () => P.kappa, (v) => P.kappa = v, f2, HELP.kappa),
-    slider('genus Δ', 0, 0.6, 0.005, () => P.genusThreshold, (v) => P.genusThreshold = v, (v) => v.toFixed(3), HELP.genusThreshold),
-    slider('species Δ', 0, 0.4, 0.005, () => P.speciesThreshold, (v) => P.speciesThreshold = v, (v) => v.toFixed(3), HELP.speciesThreshold),
+    slider('genus Δ', 0, 0.9, 0.005, () => P.genusThreshold, (v) => P.genusThreshold = v, (v) => v.toFixed(3), HELP.genusThreshold),
+    slider('species Δ', 0, 0.6, 0.005, () => P.speciesThreshold, (v) => P.speciesThreshold = v, (v) => v.toFixed(3), HELP.speciesThreshold),
     slider('isolation', 0, 0.4, 0.005, () => P.isolation, (v) => P.isolation = v, (v) => v.toFixed(3), HELP.isolation),
   ], 'live'));
 
