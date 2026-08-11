@@ -49,10 +49,10 @@ play, **`.`** to single-step, **R** to reset.
   a low species threshold, so the species count climbs from 1 as genomes diverge.
 - **Trophic web** (preset 8) — the energy model on, over an organic **flora field**:
   the resource is drawn as a fairly uniform but organic scatter of grass/moss marks
-  (fractal-noise capacity) ringed by a **membrane** contour. One lineage of "plants"
-  grazing the flora evolves a class of "animals" that prey on them: an emergent food
-  chain. Coloured by trophic type (green → red); grazing thins the flora where the
-  population feeds; the plant and animal counts are in the top-left readout.
+  (fractal-noise capacity). One lineage of "plants" grazing the flora evolves a class
+  of "animals" that prey on them: an emergent food chain. Coloured by trophic type
+  (green → red); grazing thins the flora where the population feeds; the plant and
+  animal counts are in the top-left readout.
 
 **Taxonomy (coarse → fine): lineage > genus > species.** A *lineage* is a founder
 identity — a distinct brush/ruleset. Cells painted with the same brush share a

@@ -105,9 +105,8 @@ const GROUND = '#12100E';
 // The resource field, drawn in the same flat-disc-and-line language as the cells:
 // a fairly uniform but organic scatter of "flora" marks (grass/moss dots, the odd
 // flower) whose size and brightness follow the local resource and vanish where the
-// population has grazed, plus a "membrane" — smooth iso-line contours around the
-// vegetated patches. No blocky grid; the marks are on a jittered (non-aligned) grid
-// and the membrane is marching-squares on the field, so both read as organic.
+// population has grazed. The marks are on a jittered (non-aligned) grid, so the
+// distribution reads organic with no blocky grid.
 
 // Static flora positions, regenerated only when the habitat size or field seed changes.
 let flora = null, floraN = 0, floraKey = '';
@@ -143,34 +142,6 @@ function sampleField(F, fnx, fny, Wx, Wy, inv, wx, wy) {
   return ((a * (1 - rx) + b * rx) * (1 - ry) + (c * (1 - rx) + d * rx) * ry) * inv;
 }
 
-// Marching-squares iso-contour of the (normalized) resource field at level T — the
-// organic "membrane" outlining the vegetated patches. Interior cells only (skips the
-// torus seam), edge-interpolated so the curve is smooth, not stepped.
-function drawMembrane(ctx, F, fnx, fny, Wx, Wy, view, inv, T, style, width) {
-  const { scale, ox, oy } = view;
-  const sx = Wx / fnx, sy = Wy / fny;
-  ctx.strokeStyle = style; ctx.lineWidth = width; ctx.beginPath();
-  for (let gy = 0; gy < fny - 1; gy++) {
-    for (let gx = 0; gx < fnx - 1; gx++) {
-      const v00 = F[gy * fnx + gx] * inv, v10 = F[gy * fnx + gx + 1] * inv;
-      const v11 = F[(gy + 1) * fnx + gx + 1] * inv, v01 = F[(gy + 1) * fnx + gx] * inv;
-      let idx = 0; if (v00 > T) idx |= 1; if (v10 > T) idx |= 2; if (v11 > T) idx |= 4; if (v01 > T) idx |= 8;
-      if (idx === 0 || idx === 15) continue;
-      const bx = (gx + 0.5) * sx, by = (gy + 0.5) * sy;  // cell-centre corner of the marching-squares cell
-      const pts = [];
-      if ((v00 > T) !== (v10 > T)) pts.push([bx + (T - v00) / (v10 - v00) * sx, by]);            // bottom edge
-      if ((v10 > T) !== (v11 > T)) pts.push([bx + sx, by + (T - v10) / (v11 - v10) * sy]);       // right edge
-      if ((v11 > T) !== (v01 > T)) pts.push([bx + sx - (T - v11) / (v01 - v11) * sx, by + sy]);  // top edge
-      if ((v01 > T) !== (v00 > T)) pts.push([bx, by + sy - (T - v01) / (v00 - v01) * sy]);        // left edge
-      for (let p = 0; p + 1 < pts.length; p += 2) {
-        ctx.moveTo(ox + pts[p][0] * scale, oy + pts[p][1] * scale);
-        ctx.lineTo(ox + pts[p + 1][0] * scale, oy + pts[p + 1][1] * scale);
-      }
-    }
-  }
-  ctx.stroke();
-}
-
 function drawField(ctx, state, P, view) {
   const F = state.field, K = state.fieldK, fnx = state.fieldNX, fny = state.fieldNY;
   if (!F) return;
@@ -181,10 +152,6 @@ function drawField(ctx, state, P, view) {
   let kmax = 1e-3;
   for (let c = 0; c < K.length; c++) if (K[c] > kmax) kmax = K[c];
   const inv = 1 / kmax;
-
-  // membrane: two nested contours for a little depth (outer boundary + lusher interior)
-  drawMembrane(ctx, F, fnx, fny, Wx, Wy, view, inv, 0.42, 'rgba(122,166,96,0.42)', 1.2);
-  drawMembrane(ctx, F, fnx, fny, Wx, Wy, view, inv, 0.72, 'rgba(150,190,112,0.24)', 0.8);
 
   // flora marks — kept dim and olive (not the vivid green of the plant particles) so
   // the living discs read clearly on top; brightness/size follow the local resource.
