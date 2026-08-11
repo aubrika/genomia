@@ -35,10 +35,31 @@ export const DEFAULTS = {
   world: 1000, R: 17, sigma: 0.6,
   costsOn: true, kMove: 0.4, kSense: 0.3, kTol: 0.5, kTaxis: 0.2,
   recomb: 'crossover', mutation: 'gaussian', mu: 0.1, sigmaG: 0.05, kappa: 0.15,
-  speciation: 0,          // chance a birth founds a NEW lineage (else inherits parent's)
+  // Lineage = founder identity (which brush); inherited unchanged forever.
+  // Species = divergence-based subdivisions within a lineage.
+  speciesThreshold: 0.16, // genetic distance from a species' founding genome at which an offspring founds a NEW species (same lineage). 0 = off.
+  isolation: 0,           // reproductive isolation: a crossover mate must be within this genetic distance. 0 = off (mate with any neighbor).
   maxAgeOn: false, maxAge: 400,
   cap: 12000,
 };
+
+// Normalized genetic distance: RMS of per-gene differences scaled by each gene's
+// range, so it sits in ~[0,1] and every gene contributes comparably.
+function geneDist(A, ao, B, bo, ranges) {
+  let s = 0;
+  for (let g = 0; g < G; g++) { const r = ranges[g][1] - ranges[g][0]; const d = (A[ao + g] - B[bo + g]) / r; s += d * d; }
+  return Math.sqrt(s / G);
+}
+
+// Register a new species: records its founding genome, founder lineage, and parent
+// species (-1 for a founder). Genealogy only — never read by the dynamics.
+export function foundSpecies(state, genome, off, lineageId, parent) {
+  const id = state.nextSpecies++;
+  const ref = new Float32Array(G);
+  for (let g = 0; g < G; g++) ref[g] = genome[off + g];
+  state.spRef[id] = ref; state.spLineage[id] = lineageId; state.spParent[id] = parent;
+  return id;
+}
 
 function smoothstep(a, b, x) {
   if (a === b) return x < a ? 0 : 1;
@@ -59,6 +80,10 @@ export function createState(cap) {
     x: new Float32Array(cap), y: new Float32Array(cap),
     age: new Float32Array(cap), lineage: new Int32Array(cap),
     genome: new Float32Array(cap * G),
+    species: new Int32Array(cap),
+    // species registry (grows with divergence): founding genome, parent species, founder lineage
+    spRef: [], spParent: [], spLineage: [], nextSpecies: 0,
+    _spColor: [],   // renderer-owned color cache, keyed by species id; cleared on reset
     rng: makeRNG(1),
     _scratch: null, _rangesR: -1, _ranges: null,
   };
@@ -66,6 +91,7 @@ export function createState(cap) {
 
 export function resetState(state, seed) {
   state.count = 0; state.tick = 0; state.nextLineage = 1;
+  state.spRef = []; state.spParent = []; state.spLineage = []; state.nextSpecies = 0; state._spColor = [];
   state.rng = makeRNG(seed >>> 0);
 }
 
@@ -85,8 +111,9 @@ export function clampGene(genome, base, ranges) {
   }
 }
 
-// Place one agent. lineageId null => fresh lineage (hand-placed cells).
-export function addAgent(state, x, y, genomeArr, lineageId, ranges) {
+// Place one agent. lineageId null => fresh founder lineage; speciesId null => found
+// a fresh species from this genome (hand-placed cells that don't share a brush).
+export function addAgent(state, x, y, genomeArr, lineageId, ranges, speciesId) {
   if (state.count >= state.cap) return -1;
   const i = state.count++;
   state.x[i] = x; state.y[i] = y; state.age[i] = 0;
@@ -94,6 +121,7 @@ export function addAgent(state, x, y, genomeArr, lineageId, ranges) {
   const base = i * G;
   for (let g = 0; g < G; g++) state.genome[base + g] = genomeArr[g];
   clampGene(state.genome, base, ranges);
+  state.species[i] = speciesId != null ? speciesId : foundSpecies(state, state.genome, base, state.lineage[i], -1);
   return i;
 }
 
@@ -104,7 +132,7 @@ function ensureScratch(state) {
     s = state._scratch = {
       n: new Float32Array(cap), gx: new Float32Array(cap), gy: new Float32Array(cap),
       survive: new Uint8Array(cap), cellIdx: new Int32Array(cap), items: new Int32Array(cap),
-      bx: new Float32Array(cap), by: new Float32Array(cap), bl: new Int32Array(cap),
+      bx: new Float32Array(cap), by: new Float32Array(cap), bl: new Int32Array(cap), bspecies: new Int32Array(cap),
       bg: new Float32Array(cap * G),
       counts: null, cursor: null,
     };
@@ -119,8 +147,8 @@ function ranges(state, P) {
 
 // Weighted-reservoir pick of a second parent among the emitter's perceived
 // neighbors (kernel weight = perception strength). Returns index or -1 if alone.
-function pickSecondParent(state, i, rng, counts, items, cellIdx, nx, ny, Wx, Wy, P) {
-  const R = P.R, base = i * G;
+function pickSecondParent(state, i, rng, counts, items, cellIdx, nx, ny, Wx, Wy, P, rr) {
+  const R = P.R, base = i * G, iso = P.isolation;
   const ri = R * state.genome[base + GENE.rScale], ri2 = ri * ri;
   const xi = state.x[i], yi = state.y[i], halfWx = Wx / 2, halfWy = Wy / 2;
   const cx = cellIdx[i] % nx, cy = (cellIdx[i] / nx) | 0;
@@ -137,6 +165,8 @@ function pickSecondParent(state, i, rng, counts, items, cellIdx, nx, ny, Wx, Wy,
         if (dy > halfWy) dy -= Wy; else if (dy < -halfWy) dy += Wy;
         const d2 = dx * dx + dy * dy;
         if (d2 < ri2) {
+          // reproductive isolation: skip mates too genetically distant
+          if (iso > 0 && geneDist(state.genome, base, state.genome, j * G, rr) > iso) continue;
           const wj = 1 - d2 / ri2, wgt = wj * wj;
           total += wgt;
           if (rng.next() * total < wgt) chosen = j;
@@ -167,7 +197,7 @@ function buildOffspring(state, i, rng, P, rr, bg, off, counts, items, cellIdx, n
   const base = i * G, GEN = state.genome, mode = P.recomb;
   for (let g = 0; g < G; g++) bg[off + g] = GEN[base + g];
   if (mode !== 'clonal') {
-    const j = pickSecondParent(state, i, rng, counts, items, cellIdx, nx, ny, Wx, Wy, P);
+    const j = pickSecondParent(state, i, rng, counts, items, cellIdx, nx, ny, Wx, Wy, P, rr);
     if (j >= 0) {
       const bj = j * G;
       if (mode === 'crossover') {
@@ -192,7 +222,7 @@ export function step(state, P) {
   const rng = state.rng;
   const s = ensureScratch(state);
   const { n, gx, gy, survive } = s;
-  const X = state.x, Y = state.y, GEN = state.genome, AGE = state.age, LIN = state.lineage;
+  const X = state.x, Y = state.y, GEN = state.genome, AGE = state.age, LIN = state.lineage, SPE = state.species;
 
   // 1. Uniform-grid spatial index. Bucket = R*1.5 = max perception radius, so a
   //    3x3 bucket neighborhood always covers any cell's r_i.
@@ -259,7 +289,8 @@ export function step(state, P) {
 
   // 4. Birth — survivors inside the (soft) birth band emit one offspring at f_eff.
   let bc = 0;
-  const bx = s.bx, by = s.by, bg = s.bg, bl = s.bl;
+  const bx = s.bx, by = s.by, bg = s.bg, bl = s.bl, bspecies = s.bspecies;
+  const spThr = P.speciesThreshold;
   for (let i = 0; i < N; i++) {
     if (!survive[i]) continue;
     const base = i * G, ni = n[i];
@@ -281,9 +312,12 @@ export function step(state, P) {
     const dist = Math.abs(dd + dd * cv * rng.gauss());
     bx[bc] = wrap(X[i] + Math.cos(ang) * dist, Wx);
     by[bc] = wrap(Y[i] + Math.sin(ang) * dist, Wy);
-    // speciation: occasionally the offspring founds a fresh lineage instead of
-    // inheriting the parent's — the only way lineage count can rise over time.
-    bl[bc] = (P.speciation > 0 && rng.next() < P.speciation) ? state.nextLineage++ : LIN[i];
+    bl[bc] = LIN[i];                       // lineage (founder) is inherited unchanged
+    // species: if the offspring has drifted past the threshold from its species'
+    // founding genome, it founds a new species within the same lineage.
+    const psp = SPE[i];
+    bspecies[bc] = (spThr > 0 && geneDist(bg, bc * G, state.spRef[psp], 0, rr) > spThr)
+      ? foundSpecies(state, bg, bc * G, LIN[i], psp) : psp;
     bc++;
   }
 
@@ -306,7 +340,7 @@ export function step(state, P) {
   for (let i = 0; i < N; i++) {
     if (!survive[i]) continue;
     if (w !== i) {
-      X[w] = X[i]; Y[w] = Y[i]; AGE[w] = AGE[i]; LIN[w] = LIN[i];
+      X[w] = X[i]; Y[w] = Y[i]; AGE[w] = AGE[i]; LIN[w] = LIN[i]; SPE[w] = SPE[i];
       const ws = w * G, bs = i * G;
       for (let g = 0; g < G; g++) GEN[ws + g] = GEN[bs + g];
     }
@@ -314,7 +348,7 @@ export function step(state, P) {
   }
   for (let b = 0; b < bc; b++) {
     if (w >= state.cap) break;
-    X[w] = bx[b]; Y[w] = by[b]; AGE[w] = 0; LIN[w] = bl[b];
+    X[w] = bx[b]; Y[w] = by[b]; AGE[w] = 0; LIN[w] = bl[b]; SPE[w] = bspecies[b];
     const ws = w * G, bsrc = b * G;
     for (let g = 0; g < G; g++) GEN[ws + g] = bg[bsrc + g];
     w++;
@@ -340,7 +374,7 @@ export function computeStats(state, P) {
     vi += v / (rg * rg);
   }
   vi /= G;
-  const seen = new Set();
-  for (let i = 0; i < N; i++) seen.add(state.lineage[i]);
-  return { population: N, mean, sd, varianceIndex: vi, lineages: seen.size };
+  const seen = new Set(), spSeen = new Set();
+  for (let i = 0; i < N; i++) { seen.add(state.lineage[i]); spSeen.add(state.species[i]); }
+  return { population: N, mean, sd, varianceIndex: vi, lineages: seen.size, species: spSeen.size };
 }

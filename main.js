@@ -1,7 +1,7 @@
 // Glue: UI, canvas, interaction, loop, instrumentation. All simulation logic
 // lives in sim.js (DOM-free); this file is the instrument panel around it.
 import {
-  createState, resetState, addAgent, step, computeStats,
+  createState, resetState, addAgent, step, computeStats, foundSpecies,
   geneRanges, DEFAULTS, G, GENE, GENE_NAMES,
 } from './sim.js';
 import { draw, phenotypeHSL, hslToRgb } from './render.js';
@@ -21,6 +21,22 @@ function setBrush(spec) {
   brush[GENE.bLo] = spec.bLo; brush[GENE.bHi] = spec.bHi; brush[GENE.fecundity] = spec.fec;
   brush[GENE.dDisp] = spec.dDisp * P.R; brush[GENE.dCV] = spec.dCV;
   brush[GENE.step] = spec.step * P.R; brush[GENE.taxis] = spec.taxis;
+  brushDirty = true;
+}
+
+// A "lineage" is a founder identity = a distinct brush/ruleset. Cells painted with
+// the same (unchanged) brush share a lineage; edit any gene and the next cells you
+// place found a new lineage. brushFounder() lazily allocates that founder the first
+// time it's needed after a change.
+let brushDirty = true, curLineage = 0, curSpecies = -1;
+const markBrushDirty = () => { brushDirty = true; };
+function brushFounder() {
+  if (brushDirty || curSpecies < 0 || curSpecies >= state.nextSpecies) {
+    curLineage = state.nextLineage++;
+    curSpecies = foundSpecies(state, brush, 0, curLineage, -1);
+    brushDirty = false;
+  }
+  return { lineage: curLineage, species: curSpecies };
 }
 setBrush({ rScale: 1.0, sLo: 0.6, sHi: 3.0, bLo: 1.0, bHi: 2.4, fec: 0.22, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10 });
 
@@ -80,8 +96,9 @@ const HELP = {
   mu: 'Mutation rate: the per-gene probability that a gene is nudged when an offspring is born.',
   sigmaG: 'Mutation size: the standard deviation of each nudge, as a fraction of that gene’s full range.',
   kappa: 'Cornered pull strength: how hard threshold genes are pushed toward their range ends (only in "cornered" mutation).',
-  speciation: 'Chance that a birth founds a brand-new lineage instead of inheriting the parent’s. Offspring otherwise keep their parent’s lineage, so this is the only way the lineage count can rise. Watch it with lineage coloring.',
-  color: 'phenotype = colour encodes the genome (hue = niche centre, saturation = niche breadth, lightness = motility) — similar genomes look similar. lineage = colour by ancestry: a drift null model where same-hue clumps are founder effects, not adaptation.',
+  speciesThreshold: 'Species threshold (genetic distance). When an offspring drifts this far from its species’ founding genome, it founds a NEW species within the same lineage. Lower = species split more readily; 0 = never (one species per lineage).',
+  isolation: 'Reproductive isolation (genetic distance). With crossover, a second parent must be within this distance of the first, so diverged species stop interbreeding and can drift apart. 0 = off (mate with any neighbour).',
+  color: 'phenotype = colour encodes the genome (hue = niche centre, saturation = niche breadth, lightness = motility) — similar genomes look similar. genealogy = each founder lineage gets a distinct base hue and every speciation steps the colour a little, so related species share a colour family and drift step-wise.',
   lines: 'Draw a link between cells that perceive each other. Solid = mutual perception, dashed = one-way (a real consequence of different rScale). Line opacity follows perception strength, so links fade in and out as cells drift.',
   seed: 'Random seed. The same seed plus the same parameters reproduces a run exactly.',
   play: 'Run or pause the simulation. (Space)',
@@ -89,7 +106,7 @@ const HELP = {
   reset: 'Clear and re-seed the population using the Initialize settings below. (R)',
   population: 'How many cells to place when seeding.',
   layout: 'Spatial arrangement of the initial seed: scattered uniformly, one central blob, several blobs, a ring, or a low-variance jittered lattice (best for narrow-band genomes that would otherwise avalanche).',
-  genomeInit: 'Genome of seeded cells: clone the current brush, draw uniform-random genes, place two competing clones A/B apart, or seed one clonal lineage (all share a single ancestor — useful with speciation to watch lineages bloom from 1).',
+  genomeInit: 'Genome of seeded cells. clone brush = one founder lineage (all share the current rules). uniform random = each cell its own random genome and its own founder. two clones A/B = two founder lineages placed apart to compete.',
   spread: 'Genetic jitter added to seeded genomes. A pure clone boom-busts in lockstep; a little spread gives selection material and smooths the opening crash.',
   applyInit: 'Clear everything and re-seed with the current Initialize settings.',
   randomize: 'Fill the brush with a random genome.',
@@ -99,18 +116,18 @@ const HELP = {
   sparkPop: 'Living cell count over time.',
   sparkGene: 'Mean ± standard deviation of the selected gene across the whole population.',
   sparkVar: 'Genetic variance index — mean per-gene variance, normalised by range. The headline number: it collapses under blend inheritance and holds steady under crossover.',
-  sparkLin: 'Number of distinct surviving lineages. Falls as lineages go extinct; rises only via speciation.',
+  sparkSpecies: 'Number of distinct surviving species. Rises as genomes diverge past the species threshold and falls as species go extinct. The founder-lineage count is shown in the top-left readout.',
 };
 
-const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Motile swarm', 'Allee frontier', 'Membranes', 'Lineage bloom'];
+const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Motile swarm', 'Allee frontier', 'Membranes', 'Species bloom'];
 const PRESET_TIPS = [
   'Conway-ish — a continuous B3/S23-flavoured regime: tight bands, low motility, short dispersal. Seeded on a lattice, it crashes then blooms into a patchy, oscillator-like population.',
   'Gray goo — costs off, wide tolerance. Every gene runs to its extreme and the board saturates into a grey monoculture: the degenerate attractor. Toggle "costs" to see why cost matters.',
   'Blend collapse — blend inheritance averages parents, halving genetic variance each generation. Watch the variance-index sparkline fall off a cliff and the colours wash out.',
   'Motile swarm — high motility and positive taxis: cells steer toward crowding and self-organise into moving clumps without any birth/death tuning.',
-  'Allee frontier — high loneliness threshold and short dispersal make slow, pushed expansion fronts and strong clade structure (switch to lineage colouring to see the founder clumps).',
+  'Allee frontier — high loneliness threshold and short dispersal make slow, pushed expansion fronts and strong clade structure (switch to genealogy colouring to see the founder clumps).',
   'Membranes (experimental) — cells aggregate into clumps, but a low overcrowding cap kills the crowded interior, leaving a living shell around a hollow void: rings and walls. A best-guess at emergent “cell membranes”.',
-  'Lineage bloom — one clonal ancestor in a fast, sustaining regime with high speciation, so new lineages are founded faster than they die out and the lineage count climbs from 1. Best viewed with lineage colouring.',
+  'Species bloom — one founder lineage in a fast, mutating regime with a low species threshold, so genomes keep diverging past it and the species count climbs from 1. Switch to genealogy colouring to watch the palette fracture into a family tree.',
 ];
 
 // ---- side panel -----------------------------------------------------------
@@ -135,7 +152,7 @@ function buildSide() {
   // Presets
   side.append(section('Presets', [
     el('div', { class: 'grid7' }, PRESET_NAMES.map((n, i) => button(String(i + 1), () => applyPreset(i), '', PRESET_TIPS[i]))),
-    el('p', { class: 'hint' }, ['1 Conway · 2 Gray goo · 3 Blend · 4 Swarm · 5 Allee · 6 Membranes · 7 Lineage bloom — hover for details']),
+    el('p', { class: 'hint' }, ['1 Conway · 2 Gray goo · 3 Blend · 4 Swarm · 5 Allee · 6 Membranes · 7 Species bloom — hover for details']),
   ]));
 
   // Rules
@@ -165,7 +182,8 @@ function buildSide() {
     slider('rate μ', 0, 0.5, 0.01, () => P.mu, (v) => P.mu = v, f2, HELP.mu),
     slider('σ_g', 0, 0.3, 0.005, () => P.sigmaG, (v) => P.sigmaG = v, (v) => v.toFixed(3), HELP.sigmaG),
     slider('corner κ', 0, 0.5, 0.01, () => P.kappa, (v) => P.kappa = v, f2, HELP.kappa),
-    slider('speciation', 0, 0.3, 0.005, () => P.speciation, (v) => P.speciation = v, (v) => v.toFixed(3), HELP.speciation),
+    slider('species Δ', 0, 0.4, 0.005, () => P.speciesThreshold, (v) => P.speciesThreshold = v, (v) => v.toFixed(3), HELP.speciesThreshold),
+    slider('isolation', 0, 0.4, 0.005, () => P.isolation, (v) => P.isolation = v, (v) => v.toFixed(3), HELP.isolation),
   ]));
 
   // Rendering
@@ -173,7 +191,7 @@ function buildSide() {
     ui.showLines = !ui.showLines; linesBtn.textContent = ui.showLines ? 'lines ON' : 'lines OFF'; linesBtn.classList.toggle('on', ui.showLines);
   }, ui.showLines ? 'on' : '', HELP.lines);
   side.append(section('Rendering', [
-    ctrlSelect('color', [['phenotype', 'phenotype'], ['lineage', 'lineage']], ui.colorMode, (v) => ui.colorMode = v, HELP.color),
+    ctrlSelect('color', [['phenotype', 'phenotype'], ['lineage', 'genealogy']], ui.colorMode, (v) => ui.colorMode = v, HELP.color),
     el('div', { class: 'row' }, [linesBtn]),
   ]));
 
@@ -181,7 +199,7 @@ function buildSide() {
   const rr = geneR();
   const geneRows = GENE_NAMES.map((name, g) => slider(
     name, rr[g][0], rr[g][1], (rr[g][1] - rr[g][0]) / 200,
-    () => brush[g], (v) => brush[g] = v,
+    () => brush[g], (v) => { brush[g] = v; markBrushDirty(); },
     g === GENE.fecundity ? ((v) => v.toFixed(3)) : f2, HELP[name],
   ));
   side.append(section('Brush genome', [
@@ -194,7 +212,7 @@ function buildSide() {
   side.append(section('Initialize', [
     slider('population', 100, P.cap, 100, () => init.population, (v) => init.population = v, (v) => v.toFixed(0), HELP.population),
     ctrlSelect('layout', [['uniform', 'uniform'], ['blob', 'central blob'], ['kblobs', 'k blobs'], ['ring', 'ring'], ['lattice', 'jittered lattice']], init.layout, (v) => init.layout = v, HELP.layout),
-    ctrlSelect('genome', [['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B'], ['mono', 'one clone (1 lineage)']], init.genomeInit, (v) => init.genomeInit = v, HELP.genomeInit),
+    ctrlSelect('genome', [['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B']], init.genomeInit, (v) => init.genomeInit = v, HELP.genomeInit),
     slider('spread', 0, 0.15, 0.005, () => init.spread, (v) => init.spread = v, (v) => v.toFixed(3), HELP.spread),
     button('apply init', applyInit, '', HELP.applyInit),
   ]));
@@ -226,10 +244,10 @@ function buildBottom() {
   const dd = select(GENE_NAMES.map((n, i) => [String(i), n]), String(selGene), (v) => { selGene = parseInt(v, 10); });
   makeSpark('gene', 'gene', false, HELP.sparkGene, dd);
   makeSpark('vi', 'variance index', true, HELP.sparkVar);
-  makeSpark('lin', 'lineages', false, HELP.sparkLin);
+  makeSpark('lin', 'species', false, HELP.sparkSpecies);
 }
 function pushHist(s) {
-  hist.pop.push(s.population); hist.vi.push(s.varianceIndex); hist.lin.push(s.lineages);
+  hist.pop.push(s.population); hist.vi.push(s.varianceIndex); hist.lin.push(s.species);
   hist.gm.push(s.mean[selGene]); hist.gs.push(s.sd[selGene]);
   for (const k in hist) if (hist[k].length > HMAX) hist[k].shift();
 }
@@ -262,7 +280,7 @@ function drawSparks(s) {
   $('#popv').textContent = s.population;
   $('#genev').textContent = f2(s.mean[selGene]) + ' ±' + f2(s.sd[selGene]);
   $('#viv').textContent = s.varianceIndex.toFixed(4);
-  $('#linv').textContent = s.lineages;
+  $('#linv').textContent = s.species;
 }
 
 // ---- init / presets -------------------------------------------------------
@@ -270,29 +288,37 @@ function applyInit() {
   resetState(state, init.seed | 0);
   const rr = geneR(), Wx = P.worldW, Wy = P.worldH, Dm = Math.min(Wx, Wy), n = init.population, rng = state.rng;
   const wx_ = (v) => ((v % Wx) + Wx) % Wx, wy_ = (v) => ((v % Wy) + Wy) % Wy;
-  const place = (x, y, g, lin) => addAgent(state, wx_(x), wy_(y), g, lin, rr);
+  const place = (x, y, g, lin, sp) => addAgent(state, wx_(x), wy_(y), g, lin, rr, sp);
+  brushDirty = true; curSpecies = -1;   // a fresh run; interactive placement founds anew
 
   // small per-gene jitter around a template — a monoclonal seed boom-busts in
   // lockstep, so a touch of variation gives selection something to act on.
   const jitter = (g) => { const sp = init.spread; if (sp > 0) for (let j = 0; j < G; j++) g[j] += rng.gauss() * sp * (rr[j][1] - rr[j][0]); return g; };
 
   if (init.genomeInit === 'twoclone') {
+    // two founder lineages A and B, each its own species, placed apart to compete
     const A = new Float32Array(brush), B = new Float32Array(brush);
     B[GENE.sLo] += 1.6; B[GENE.sHi] += 1.6; B[GENE.bLo] += 1.6; B[GENE.bHi] += 1.6;
     B[GENE.step] = Math.min(rr[GENE.step][1], B[GENE.step] * 1.8);
+    const linA = state.nextLineage++, spA = foundSpecies(state, A, 0, linA, -1);
+    const linB = state.nextLineage++, spB = foundSpecies(state, B, 0, linB, -1);
+    curLineage = linA; curSpecies = spA; brushDirty = false;
     const half = n >> 1, jr = Dm * 0.12;
     for (let i = 0; i < n; i++) {
       const isA = i < half, ang = rng.next() * 6.283185307179586, rad = Math.abs(rng.gauss()) * jr;
-      place((isA ? 0.3 : 0.7) * Wx + Math.cos(ang) * rad, 0.5 * Wy + Math.sin(ang) * rad, jitter(new Float32Array(isA ? A : B)), isA ? 1 : 2);
+      place((isA ? 0.3 : 0.7) * Wx + Math.cos(ang) * rad, 0.5 * Wy + Math.sin(ang) * rad,
+        jitter(new Float32Array(isA ? A : B)), isA ? linA : linB, isA ? spA : spB);
     }
   } else {
     const centers = [];
     if (init.layout === 'kblobs') for (let i = 0; i < init.k; i++) centers.push([rng.next() * Wx, rng.next() * Wy]);
-    // 'mono' seeds every cell into ONE shared lineage, so lineage count starts at 1
-    // and can only rise via speciation — the clearest way to watch lineages bloom.
-    const lin = init.genomeInit === 'mono' ? 1 : null;
+    const isUniform = init.genomeInit === 'uniform';
+    // 'clone brush' seeds ONE founder lineage/species (same rules => one lineage);
+    // 'uniform random' gives each cell its own founder (all different rules).
+    let lin = null, sp = null;
+    if (!isUniform) { lin = state.nextLineage++; sp = foundSpecies(state, brush, 0, lin, -1); curLineage = lin; curSpecies = sp; brushDirty = false; }
     const genomeOf = () => {
-      if (init.genomeInit === 'uniform') { const g = new Float32Array(G); for (let j = 0; j < G; j++) g[j] = rng.range(rr[j][0], rr[j][1]); return g; }
+      if (isUniform) { const g = new Float32Array(G); for (let j = 0; j < G; j++) g[j] = rng.range(rr[j][0], rr[j][1]); return g; }
       return jitter(new Float32Array(brush));
     };
     if (init.layout === 'lattice') {
@@ -301,7 +327,7 @@ function applyInit() {
       // Spacing derives from population, so density is window-independent.
       const a = Math.sqrt((Wx * Wy) / Math.max(1, n)), jit = 0.1 * a; let placed = 0;
       for (let gy = a / 2; gy < Wy && placed < n; gy += a)
-        for (let gx = a / 2; gx < Wx && placed < n; gx += a) { place(gx + rng.gauss() * jit, gy + rng.gauss() * jit, genomeOf(), lin); placed++; }
+        for (let gx = a / 2; gx < Wx && placed < n; gx += a) { place(gx + rng.gauss() * jit, gy + rng.gauss() * jit, genomeOf(), lin, sp); placed++; }
     } else {
       for (let i = 0; i < n; i++) {
         let x, y;
@@ -309,7 +335,7 @@ function applyInit() {
         else if (init.layout === 'blob') { x = Wx / 2 + rng.gauss() * Dm * 0.14; y = Wy / 2 + rng.gauss() * Dm * 0.14; }
         else if (init.layout === 'kblobs') { const c = centers[(rng.next() * centers.length) | 0]; x = c[0] + rng.gauss() * Dm * 0.05; y = c[1] + rng.gauss() * Dm * 0.05; }
         else { const a = rng.next() * 6.283185307179586; x = Wx / 2 + Math.cos(a) * Dm * 0.38; y = Wy / 2 + Math.sin(a) * Dm * 0.38; }
-        place(x, y, genomeOf(), lin);
+        place(x, y, genomeOf(), lin, sp);
       }
     }
   }
@@ -354,17 +380,17 @@ const PRESETS = [
     P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', sigma: 0.4 },
     init: { layout: 'uniform', genomeInit: 'brush', population: 6000, spread: 0.03 },
   },
-  { // Lineage bloom — one clonal ancestor (mono seed => 1 lineage) in a fast,
-    // sustaining regime with high speciation, so new lineages are founded faster
-    // than they go extinct and the lineage count climbs from 1.
+  { // Species bloom — one founder lineage (clone brush) in a fast, mutating regime
+    // with a low species threshold, so genomes keep diverging past it and the
+    // species count climbs from 1 (a family tree unfurling under genealogy colour).
     brush: { rScale: 1.0, sLo: 0.6, sHi: 4.0, bLo: 1.0, bHi: 2.6, fec: 0.24, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10 },
-    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', speciation: 0.08, mu: 0.2, sigmaG: 0.06 },
-    init: { layout: 'uniform', genomeInit: 'mono', population: 4000, spread: 0.03 },
+    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', mu: 0.25, sigmaG: 0.07, speciesThreshold: 0.09 },
+    init: { layout: 'uniform', genomeInit: 'brush', population: 4000, spread: 0.02 },
   },
 ];
 function applyPreset(i) {
   const pr = PRESETS[i];
-  Object.assign(P, { sigma: DEFAULTS.sigma, speciation: DEFAULTS.speciation }, pr.P);  // reset σ/speciation unless the preset sets them
+  Object.assign(P, { sigma: DEFAULTS.sigma, speciesThreshold: DEFAULTS.speciesThreshold, isolation: DEFAULTS.isolation, mu: DEFAULTS.mu, sigmaG: DEFAULTS.sigmaG }, pr.P);  // reset varied params unless the preset sets them
   setBrush(pr.brush);
   Object.assign(init, pr.init);
   buildSide();
@@ -375,13 +401,13 @@ function applyPreset(i) {
 function randomizeBrush() {
   const rr = geneR(), rng = state.rng;
   for (let g = 0; g < G; g++) brush[g] = rng.range(rr[g][0], rr[g][1]);
-  buildSide();
+  markBrushDirty(); buildSide();
 }
 function copyHovered() {
   if (ui.hovered < 0 || ui.hovered >= state.count) return;
   const base = ui.hovered * G;
   for (let g = 0; g < G; g++) brush[g] = state.genome[base + g];
-  buildSide();
+  markBrushDirty(); buildSide();
 }
 
 // ---- canvas / view --------------------------------------------------------
@@ -442,12 +468,16 @@ function eraseAt(wx, wy) {
     } else i++;
   }
 }
+function paintOne(x, y) {
+  const f = brushFounder();
+  addAgent(state, x, y, new Float32Array(brush), f.lineage, geneR(), f.species);
+}
 function placeBlob(wx, wy) {
-  const rr = geneR(), Wx = P.worldW, Wy = P.worldH, rng = state.rng;
+  const rr = geneR(), Wx = P.worldW, Wy = P.worldH, rng = state.rng, f = brushFounder();
   const wx_ = (v) => ((v % Wx) + Wx) % Wx, wy_ = (v) => ((v % Wy) + Wy) % Wy;
   for (let i = 0; i < init.blobN; i++) {
     const ang = rng.next() * 6.283185307179586, rad = Math.abs(rng.gauss()) * init.blobJitter;
-    addAgent(state, wx_(wx + Math.cos(ang) * rad), wy_(wy + Math.sin(ang) * rad), new Float32Array(brush), null, rr);
+    addAgent(state, wx_(wx + Math.cos(ang) * rad), wy_(wy + Math.sin(ang) * rad), new Float32Array(brush), f.lineage, rr, f.species);
   }
 }
 
@@ -458,14 +488,14 @@ canvas.addEventListener('pointerdown', (e) => {
   const w = worldFromEvent(e);
   if (e.altKey) { dragMode = 'erase'; eraseAt(w.x, w.y); }
   else if (e.shiftKey) { dragMode = 'blob'; placeBlob(w.x, w.y); }
-  else { dragMode = 'paint'; addAgent(state, w.x, w.y, new Float32Array(brush), null, geneR()); lastPaint = w; }
+  else { dragMode = 'paint'; paintOne(w.x, w.y); lastPaint = w; }
 });
 canvas.addEventListener('pointermove', (e) => {
   const w = worldFromEvent(e);
   if (dragMode === 'erase') eraseAt(w.x, w.y);
   else if (dragMode === 'paint') {
     const dx = w.x - lastPaint.x, dy = w.y - lastPaint.y;
-    if (dx * dx + dy * dy > (7 / view.scale) ** 2) { addAgent(state, w.x, w.y, new Float32Array(brush), null, geneR()); lastPaint = w; }
+    if (dx * dx + dy * dy > (7 / view.scale) ** 2) { paintOne(w.x, w.y); lastPaint = w; }
   } else {
     ui.hovered = pickAgent(w.x, w.y);
     updateTooltip(e);
@@ -502,7 +532,7 @@ function frame(t) {
   if (ui.playing) pushHist(s);
   drawSparks(s);
   fpsN++; if (t - fpsT > 500) { fps = Math.round(fpsN * 1000 / (t - fpsT)); fpsN = 0; fpsT = t; }
-  $('#hud').innerHTML = `tick <b>${state.tick}</b> · pop <b>${state.count}</b> · ${fps} fps${ui.playing ? '' : ' · <b>paused</b>'}`;
+  $('#hud').innerHTML = `tick <b>${state.tick}</b> · pop <b>${state.count}</b> · lineages <b>${s.lineages}</b> · ${fps} fps${ui.playing ? '' : ' · <b>paused</b>'}`;
   requestAnimationFrame(frame);
 }
 
@@ -543,8 +573,14 @@ buildSide();
 buildBottom();
 const presetM = location.hash.match(/preset=?(\d)/);  // #preset=1 — boot into a preset (dev/testing)
 if (presetM) applyPreset(+presetM[1] - 1); else applyInit();
+if (location.hash.includes('genealogy')) ui.colorMode = 'lineage';  // #genealogy — dev/testing
 // prefers-reduced-motion => stay paused (default); otherwise also default paused per spec
 const runM = location.hash.match(/run=?(\d+)/);        // #run400 — pre-step headlessly (dev/testing)
 if (runM) { const k = +runM[1]; for (let i = 0; i < k; i++) step(state, P); pushHist(computeStats(state, P)); }
-if (location.hash.includes('play')) togglePlay();
+// with a hash, playing state is explicit ('play' => run, else a paused snapshot);
+// this also overrides a preset's autoplay so screenshots don't keep stepping.
+if (location.hash.length > 1) {
+  ui.playing = location.hash.includes('play');
+  const pb = $('#playbtn'); if (pb) pb.textContent = ui.playing ? '❚❚ pause' : '▶ play';
+}
 requestAnimationFrame(frame);

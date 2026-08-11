@@ -27,17 +27,26 @@ play, **`.`** to single-step, **R** to reset.
 - **Blend inheritance** (preset 3) — blending halves genetic variance every
   generation; the variance-index sparkline falls off a cliff and the colors wash
   out. It is included specifically to fail. `crossover` (default) holds.
-- **Phenotype vs lineage color** — phenotype color is semantic (hue = niche
-  center, saturation = niche breadth, lightness = motility). Switch to *lineage*
-  to see the drift null model: spatial clumps of one hue are founder effects, not
-  adaptation.
+- **Phenotype vs genealogy color** — phenotype color is semantic (hue = niche
+  center, saturation = niche breadth, lightness = motility). Switch to *genealogy*
+  to color by ancestry: each founder **lineage** gets a distinct base hue, and every
+  **speciation** steps the color a little, so related species share a color family
+  and drift step-wise — a visible family tree.
 - **Adjacency lines** — solid where perception is mutual, dashed where one-way
   (asymmetric perception is a real consequence of the `rScale` gene). Alpha scales
   with kernel weight, so links condense and dissolve as cells drift.
 - **Membranes** (preset 6, experimental) — cells aggregate but a low overcrowding
   cap kills the crowded interior, leaving a living shell around a void.
-- **Lineage bloom** (preset 7) — one clonal ancestor plus **speciation** (a small
-  chance each birth founds a new lineage) makes the lineage count climb from 1.
+- **Species bloom** (preset 7) — one founder lineage in a fast-mutating regime with
+  a low species threshold, so the species count climbs from 1 as genomes diverge.
+
+**Lineage vs species.** A *lineage* is a founder identity — a distinct brush/ruleset.
+Cells painted with the same brush share a lineage; edit a gene and the next cells you
+paint found a new one. Lineage is inherited unchanged forever. A *species* is a
+divergence-based subdivision *within* a lineage: when an offspring's genome drifts
+past the **species Δ** (a genetic-distance threshold) from its species' founding
+genome, it founds a new species. **isolation** (also a genetic-distance cutoff)
+optionally stops diverged species from interbreeding under crossover.
 
 Every control and gene has a **hover tooltip** explaining what it does.
 

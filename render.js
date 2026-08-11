@@ -2,7 +2,7 @@
 // semantic (similar genomes look similar); adjacency lines show that "touching"
 // in continuous space is a continuous quantity. Kept separate from sim.js.
 
-import { G, GENE } from './sim.js';
+import { G, GENE, geneRanges } from './sim.js';
 
 // --- color -----------------------------------------------------------------
 // Phenotype: hue=niche center, saturation=niche breadth, lightness=motility.
@@ -20,10 +20,37 @@ export function phenotypeHSL(genome, base, R) {
   return [hue, sat, light];
 }
 
-// Lineage: hue from a golden-ratio hash of lineageId — the drift null model.
-export function lineageHSL(lineageId) {
-  const hue = (lineageId * 137.508) % 360;
-  return [hue < 0 ? hue + 360 : hue, 60, 55];
+// Genealogy-tree color: each founder lineage gets a well-separated base hue, and
+// every speciation nudges the child's color a small STEP from its parent's — the
+// step's direction/size derived from the genome change, not a hash. So related
+// species cluster in colour and drift step-wise as a lineage diversifies. Colours
+// are memoised per species on state._spColor (cleared on reset).
+const PW = [0.9, -0.7, 0.6, -0.5, 0.8, 0.4, -0.6, 0.5, -0.8, 1.0]; // fixed projection weights spread step directions
+export function speciesHSL(state, sp, ranges) {
+  const cache = state._spColor;
+  if (cache[sp]) return cache[sp];
+  // Iterative (not recursive): a deep divergence chain could be thousands long, so
+  // walk up to the nearest cached/founder ancestor, then fill colours top-down.
+  const chain = [];
+  let s = sp;
+  while (s != null && s >= 0 && !cache[s]) { chain.push(s); s = state.spParent[s]; }
+  for (let k = chain.length - 1; k >= 0; k--) {
+    const id = chain[k], parent = state.spParent[id];
+    if (parent == null || parent < 0) {
+      const hue = ((state.spLineage[id] * 137.508) % 360 + 360) % 360; // distinct base per founder lineage
+      cache[id] = [hue, 62, 55];
+    } else {
+      const pc = cache[parent];                 // already filled (ancestor, done earlier this pass or previously cached)
+      const ref = state.spRef[id], pref = state.spRef[parent];
+      let proj = 0;
+      for (let g = 0; g < G; g++) proj += ((ref[g] - pref[g]) / (ranges[g][1] - ranges[g][0])) * PW[g];
+      const hue = ((pc[0] + 26 * Math.tanh(proj)) % 360 + 360) % 360;
+      const sat = Math.max(46, Math.min(76, pc[1] + 2));
+      const light = Math.max(38, Math.min(74, pc[2] + (proj >= 0 ? 4 : -4)));
+      cache[id] = [hue, sat, light];
+    }
+  }
+  return cache[sp];
 }
 
 export function hslToRgb(h, s, l) {
@@ -67,11 +94,13 @@ export function draw(ctx, state, P, view, opts) {
   const N = state.count, GEN = state.genome, R = P.R;
   const { scale, ox, oy } = view;
   ensureColor(state.cap);
+  const treeMode = opts.colorMode === 'lineage';
+  const ranges = treeMode ? geneRanges(R) : null;
 
   // per-agent RGB for this frame
   for (let i = 0; i < N; i++) {
     const base = i * G;
-    const hsl = opts.colorMode === 'lineage' ? lineageHSL(state.lineage[i]) : phenotypeHSL(GEN, base, R);
+    const hsl = treeMode ? speciesHSL(state, state.species[i], ranges) : phenotypeHSL(GEN, base, R);
     const rgb = hslToRgb(hsl[0], hsl[1], hsl[2]);
     rB[i] = rgb[0]; gB[i] = rgb[1]; bB[i] = rgb[2];
   }
