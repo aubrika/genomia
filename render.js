@@ -25,7 +25,7 @@ export function phenotypeHSL(genome, base, R) {
 // hue jump, so each genus is a distinct colour family; a species split within a
 // genus makes a clear-but-smaller hue+lightness step. Step direction comes from the
 // genome change (not a hash), so related clades cluster in colour and drift step-wise.
-const PW = [0.9, -0.7, 0.6, -0.5, 0.8, 0.4, -0.6, 0.5, -0.8, 1.0]; // fixed projection weights spread step directions
+const PW = [0.9, -0.7, 0.6, -0.5, 0.8, 0.4, -0.6, 0.5, -0.8, 1.0, 0.7]; // fixed projection weights spread step directions
 export function speciesHSL(state, sp, ranges) {
   const cache = state._spColor;
   if (cache[sp]) return cache[sp];
@@ -56,6 +56,17 @@ export function speciesHSL(state, sp, ranges) {
     }
   }
   return cache[sp];
+}
+
+// Trophic color: hue reads the trophic gene (green autotroph "plant" -> red
+// heterotroph "animal"), lightness reads current energy (bright = well-fed). Makes
+// an emergent plant/animal split visible at a glance, and dying/starving cells dim.
+export function trophicHSL(genome, base, en, emax) {
+  const t = genome[base + GENE.trophic];
+  const hue = 130 + 220 * t;                 // 130° green (plant) → 350° red (animal)
+  let light = 52;
+  if (emax > 0) { let f = en / emax; if (f < 0) f = 0; else if (f > 1) f = 1; light = 30 + 42 * f; }
+  return [hue, 68, light];
 }
 
 export function hslToRgb(h, s, l) {
@@ -90,22 +101,47 @@ function ensurePairs(need) {
 
 const GROUND = '#12100E';
 
+// The resource field, drawn as a faint olive heatmap under everything so the
+// noise-generated gradient the autotrophs feed on is visible.
+function drawField(ctx, state, P, view) {
+  const F = state.field, K = state.fieldK, fnx = state.fieldNX, fny = state.fieldNY;
+  if (!F) return;
+  const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
+  const { scale, ox, oy } = view;
+  const sx = Wx / fnx * scale, sy = Wy / fny * scale;
+  let kmax = 1e-3;
+  for (let c = 0; c < K.length; c++) if (K[c] > kmax) kmax = K[c];
+  for (let gy = 0; gy < fny; gy++) {
+    for (let gx = 0; gx < fnx; gx++) {
+      const v = F[gy * fnx + gx] / kmax;
+      if (v <= 0.02) continue;
+      ctx.fillStyle = `rgba(86,140,74,${(0.04 + 0.17 * (v < 1 ? v : 1)).toFixed(3)})`;
+      ctx.fillRect(ox + gx * sx, oy + gy * sy, sx + 1, sy + 1);
+    }
+  }
+}
+
 export function draw(ctx, state, P, view, opts) {
   const cw = ctx.canvas.width, ch = ctx.canvas.height;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = GROUND;
   ctx.fillRect(0, 0, cw, ch);
+  if (P.energyOn) drawField(ctx, state, P, view);
 
   const N = state.count, GEN = state.genome, R = P.R;
   const { scale, ox, oy } = view;
   ensureColor(state.cap);
   const treeMode = opts.colorMode === 'lineage';
+  const trophicMode = opts.colorMode === 'trophic';
   const ranges = treeMode ? geneRanges(R) : null;
+  const emax = P.energyOn ? P.energyMax : 0, EN = state.energy;
 
   // per-agent RGB for this frame
   for (let i = 0; i < N; i++) {
     const base = i * G;
-    const hsl = treeMode ? speciesHSL(state, state.species[i], ranges) : phenotypeHSL(GEN, base, R);
+    const hsl = treeMode ? speciesHSL(state, state.species[i], ranges)
+      : trophicMode ? trophicHSL(GEN, base, EN[i], emax)
+        : phenotypeHSL(GEN, base, R);
     const rgb = hslToRgb(hsl[0], hsl[1], hsl[2]);
     rB[i] = rgb[0]; gB[i] = rgb[1]; bB[i] = rgb[2];
   }

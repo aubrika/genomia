@@ -1,10 +1,18 @@
 # Genomic Particle Life
 
 A browser simulator for a continuous-space, stochastic, Conway-derived system in
-which every cell carries an evolvable ten-gene genome. Cells are points on a torus
+which every cell carries an evolvable eleven-gene genome. Cells are points on a torus
 in ℝ², not lattice sites. They are born at a dispersal offset from a parent, die
 from loneliness or overcrowding, wander, and pass on mutated copies of their
 parameters. Everything on screen is a readout of genotype.
+
+Two things make it an evolution sandbox rather than a cellular automaton: the
+**default scene** seeds two independently randomized founder lineages, one in each
+half of the world, and lets them fight for the space — a fresh natural-selection
+contest every seed (watch the **lineage-share** sparkline to see one exclude the
+other or a coexistence hold). And an optional **energy / trophic model** turns the
+world into a food web: cells spend energy to live, feed to refill it, and a `trophic`
+gene lets one lineage split into autotroph "plants" and heterotroph "animals".
 
 ## Run it
 
@@ -39,6 +47,10 @@ play, **`.`** to single-step, **R** to reset.
   cap kills the crowded interior, leaving a living shell around a void.
 - **Species bloom** (preset 7) — one founder lineage in a fast-mutating regime with
   a low species threshold, so the species count climbs from 1 as genomes diverge.
+- **Trophic web** (preset 8) — the energy model on, over a patchy resource field.
+  One lineage of "plants" grazing the field evolves a class of "animals" that prey on
+  them: an emergent food chain. Coloured by trophic type (green → red); the plant and
+  animal counts are in the top-left readout, and the animal share climbs over time.
 
 **Taxonomy (coarse → fine): lineage > genus > species.** A *lineage* is a founder
 identity — a distinct brush/ruleset. Cells painted with the same brush share a
@@ -53,6 +65,18 @@ interbreeding under crossover.
 **Mutation.** Most mutations are small nudges (`σ_g`); a **macro** fraction are
 outsized "knockouts" that re-roll a whole gene — big, could-be-good-or-bad jumps.
 Rare macromutations are what leap across the genus threshold to found new genera.
+
+**Energy / trophic model** (toggle, off by default). When on, each cell carries an
+energy budget. Every tick it pays metabolic **upkeep** scaled by genome complexity
+("greater features cost more food"); it **feeds** to refill — autotrophs harvest a
+noise-generated **resource field** (the olive gradient) that regrows toward a spatial
+capacity, heterotrophs **prey** on nearby cells; it **starves** if energy hits zero,
+and must bank enough energy to reproduce (offspring cost their parent energy). The
+`trophic` gene sets the autotroph↔heterotroph mix on a convex trade-off, so *disruptive
+selection* pushes a mixed lineage toward the two pure extremes — plants and animals —
+and the animals' food is the energy the plants pulled out of the field. The world's
+plant carrying capacity is roughly `fieldRegrow · Σcapacity / upkeep`; predators are
+rarer than prey, as they should be, and their share grows as the food chain assembles.
 
 **Which controls apply when.** Each panel section is badged: **live** (global rules
 read every tick — cost, softness, inheritance/thresholds — applied to all existing
@@ -73,7 +97,8 @@ genome and highlights that cell's links.
   canvas, events, or document; written to be ported to Rust.
 - `prng.js` — seeded mulberry32. All stochasticity flows through it, so a seed +
   parameter set reproduces a run exactly. No `Math.random` anywhere.
-- `render.js` — Canvas 2D: semantic color, torus-aware adjacency lines, hover.
+- `render.js` — Canvas 2D: semantic / genealogy / trophic color, the resource-field
+  heatmap, torus-aware adjacency lines, hover.
 - `main.js` — UI, interaction, loop, instrumentation.
 
 ### Headless regression test

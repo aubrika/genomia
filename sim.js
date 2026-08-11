@@ -7,12 +7,13 @@
 
 import { makeRNG } from './prng.js';
 
-export const G = 10; // genes per agent
+export const G = 11; // genes per agent
 export const GENE = {
   rScale: 0, sLo: 1, sHi: 2, bLo: 3, bHi: 4,
   fecundity: 5, dDisp: 6, dCV: 7, step: 8, taxis: 9,
+  trophic: 10,
 };
-export const GENE_NAMES = ['rScale', 'sLo', 'sHi', 'bLo', 'bHi', 'fecundity', 'dDisp', 'dCV', 'step', 'taxis'];
+export const GENE_NAMES = ['rScale', 'sLo', 'sHi', 'bLo', 'bHi', 'fecundity', 'dDisp', 'dCV', 'step', 'taxis', 'trophic'];
 
 // Gene ranges. dDisp and step scale with the global interaction radius R, so the
 // dispersal/motility genes are always expressed relative to perception distance.
@@ -28,6 +29,7 @@ export function geneRanges(R) {
     [0, 1.0],     // dCV
     [0, 0.3 * R], // step
     [-1, 1],      // taxis
+    [0, 1],       // trophic: 0 = pure autotroph (feed on the field), 1 = pure heterotroph (feed on other cells)
   ];
 }
 
@@ -44,6 +46,27 @@ export const DEFAULTS = {
   speciesThreshold: 0.16, // distance from a species' founding genome at which an offspring founds a NEW species. 0 = off.
   isolation: 0,           // reproductive isolation: a crossover mate must be within this genetic distance. 0 = off (mate with any neighbor).
   maxAgeOn: false, maxAge: 400,
+
+  // Energy / trophic model (off by default; a whole separate layer). When on, cells
+  // carry an energy budget: they PAY metabolic upkeep every tick (scaled by genome
+  // complexity — "greater features cost more food"), FEED to refill it (autotrophs
+  // harvest a noise-generated resource field directly, heterotrophs prey on nearby
+  // cells), STARVE if it hits zero, and must bank enough energy to reproduce. The
+  // `trophic` gene sets the autotroph/heterotroph mix, so disruptive selection can
+  // split one lineage into "plant" and "animal" specialists — an emergent food chain.
+  energyOn: false,
+  fieldRes: 44,           // field grid resolution across the world's width
+  fieldContrast: 0.7,     // spatial contrast of the resource gradient (0 = flat, 1 = very patchy)
+  fieldRegrow: 0.20,      // per-tick refill of the field toward its local capacity ("sunlight"). Sets the
+                          //   world's carrying capacity: sustainable plants ~= fieldRegrow*sum(K)/upkeep.
+  autoGain: 1.1,          // autotroph harvest rate (energy gained per tick at a full field cell)
+  predRate: 0.6,          // heterotroph predation rate (energy drained from a neighbor per tick)
+  predGain: 0.6,          // fraction of drained energy the predator keeps (<1 = trophic loss)
+  trophicExp: 1.8,        // specialization curve: >1 makes generalists inefficient, favoring the plant/animal split
+  upkeep: 0.02,           // base metabolic drain per tick
+  geneCost: 0.03,         // extra upkeep per unit genome complexity (perception, motility, tolerance, steering)
+  birthCost: 2.0,         // energy a parent invests into each offspring (the child starts with it)
+  energyMax: 12,          // cap on stored energy
   cap: 12000,
 };
 
@@ -104,6 +127,10 @@ export function createState(cap) {
     age: new Float32Array(cap), lineage: new Int32Array(cap),
     genome: new Float32Array(cap * G),
     species: new Int32Array(cap),
+    energy: new Float32Array(cap), energy0: 6,
+    // resource field (built lazily when the energy model runs): capacity from
+    // spatial noise, current level regrows toward it and is grazed by autotrophs.
+    field: null, fieldK: null, fieldNX: 0, fieldNY: 0, _fieldW: -1, _fieldH: -1, _fieldSeed: -1,
     // divergence registries (grow): species (fine) and genus (coarse) tiers
     spRef: [], spParent: [], spLineage: [], spGenus: [], spBig: [], nextSpecies: 0,
     gRef: [], gParent: [], gLineage: [], nextGenus: 0,
@@ -118,7 +145,42 @@ export function resetState(state, seed) {
   state.spRef = []; state.spParent = []; state.spLineage = []; state.spGenus = []; state.spBig = []; state.nextSpecies = 0;
   state.gRef = []; state.gParent = []; state.gLineage = []; state.nextGenus = 0;
   state._spColor = [];
+  state._fieldW = -1; state._fieldH = -1; state._fieldSeed = -1;   // force the field to rebuild for the new run
   state.rng = makeRNG(seed >>> 0);
+}
+
+// Build the resource field: a smooth noise capacity map (bilinear value noise from a
+// coarse random lattice) plus a current level initialized to capacity. Deterministic
+// in its own seed so it never disturbs the main simulation RNG sequence. Rebuilt when
+// the world resizes or the seed changes.
+export function buildField(state, P) {
+  const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
+  const seed = (P.fieldSeed != null ? P.fieldSeed : 12345) >>> 0;
+  if (state.field && state._fieldW === Wx && state._fieldH === Wy && state._fieldSeed === seed) return;
+  const nx = Math.max(4, P.fieldRes | 0), ny = Math.max(4, Math.round(nx * Wy / Wx));
+  const nc = nx * ny;
+  const field = new Float32Array(nc), K = new Float32Array(nc);
+  const rng = makeRNG(seed ^ 0x9e3779b9);
+  // coarse control lattice, wrapped (torus), smoothed by bilinear interpolation
+  const cx = 6, cy = 6, ctrl = new Float32Array(cx * cy);
+  for (let i = 0; i < ctrl.length; i++) ctrl[i] = rng.next();
+  const contrast = P.fieldContrast;
+  const smooth = (t) => t * t * (3 - 2 * t);
+  for (let gy = 0; gy < ny; gy++) {
+    for (let gx = 0; gx < nx; gx++) {
+      const u = gx / nx * cx, v = gy / ny * cy;
+      const x0 = Math.floor(u), y0 = Math.floor(v);
+      const fx = smooth(u - x0), fy = smooth(v - y0);
+      const x1 = (x0 + 1) % cx, y1 = (y0 + 1) % cy, xa = x0 % cx, ya = y0 % cy;
+      const a = ctrl[ya * cx + xa], b = ctrl[ya * cx + x1], c = ctrl[y1 * cx + xa], d = ctrl[y1 * cx + x1];
+      const noise = (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy; // ~[0,1]
+      const k = 1 + contrast * (noise * 2 - 1);        // capacity in ~[1-contrast, 1+contrast]
+      const c2 = gy * nx + gx;
+      K[c2] = k < 0.02 ? 0.02 : k; field[c2] = K[c2];
+    }
+  }
+  state.field = field; state.fieldK = K; state.fieldNX = nx; state.fieldNY = ny;
+  state._fieldW = Wx; state._fieldH = Wy; state._fieldSeed = seed;
 }
 
 // Clamp every gene into range and enforce sLo<=sHi, bLo<=bHi (swap if inverted).
@@ -142,7 +204,7 @@ export function clampGene(genome, base, ranges) {
 export function addAgent(state, x, y, genomeArr, lineageId, ranges, speciesId) {
   if (state.count >= state.cap) return -1;
   const i = state.count++;
-  state.x[i] = x; state.y[i] = y; state.age[i] = 0;
+  state.x[i] = x; state.y[i] = y; state.age[i] = 0; state.energy[i] = state.energy0;
   state.lineage[i] = lineageId != null ? lineageId : state.nextLineage++;
   const base = i * G;
   for (let g = 0; g < G; g++) state.genome[base + g] = genomeArr[g];
@@ -160,6 +222,7 @@ function ensureScratch(state) {
       survive: new Uint8Array(cap), cellIdx: new Int32Array(cap), items: new Int32Array(cap),
       bx: new Float32Array(cap), by: new Float32Array(cap), bl: new Int32Array(cap), bspecies: new Int32Array(cap),
       bg: new Float32Array(cap * G),
+      dE: new Float32Array(cap), ae: new Float32Array(cap), pe: new Float32Array(cap), // energy: net feed delta, autotroph & predator efficiencies
       counts: null, cursor: null,
     };
   }
@@ -256,6 +319,20 @@ export function step(state, P) {
   const { n, gx, gy, survive } = s;
   const X = state.x, Y = state.y, GEN = state.genome, AGE = state.age, LIN = state.lineage, SPE = state.species;
 
+  // Energy model setup: derive each cell's autotroph/heterotroph efficiencies from
+  // its trophic gene (a convex trade-off, so specialists beat generalists), and zero
+  // the per-cell energy delta that the density pass fills with predation.
+  const eOn = P.energyOn;
+  const EN = state.energy, dE = s.dE, ae = s.ae, pe = s.pe;
+  const texp = P.trophicExp, predRate = P.predRate, predGain = P.predGain;
+  if (eOn) {
+    buildField(state, P);
+    for (let i = 0; i < N; i++) {
+      const t = GEN[i * G + GENE.trophic];
+      ae[i] = Math.pow(1 - t, texp); pe[i] = Math.pow(t, texp); dE[i] = 0;
+    }
+  }
+
   // 1. Uniform-grid spatial index. Bucket = R*1.5 = max perception radius, so a
   //    3x3 bucket neighborhood always covers any cell's r_i.
   const bucket = R * 1.5;
@@ -282,7 +359,8 @@ export function step(state, P) {
     const ri = R * GEN[base + GENE.rScale], ri2 = ri * ri;
     const xi = X[i], yi = Y[i];
     const cx = cellIdx[i] % nx, cy = (cellIdx[i] / nx) | 0;
-    let acc = 0, agx = 0, agy = 0;
+    const pei = eOn ? pe[i] : 0;
+    let acc = 0, agx = 0, agy = 0, dEi = 0;
     for (let ddy = -1; ddy <= 1; ddy++) {
       const cyy = ((cy + ddy) % ny + ny) % ny;
       for (let ddx = -1; ddx <= 1; ddx++) {
@@ -299,22 +377,50 @@ export function step(state, P) {
             acc += wgt;
             const d = Math.sqrt(d2);
             if (d > 1e-9) { const inv = wgt / d; agx += inv * dx; agy += inv * dy; }
+            // predation: i drains energy from neighbor j; soft prey (low predEff)
+            // is more vulnerable than a tough predator, so animals eat plants first.
+            if (pei > 0) { const drain = predRate * pei * wgt * (1 - pe[j]); dEi += predGain * drain; dE[j] -= drain; }
           }
         }
       }
     }
     n[i] = acc;
+    if (eOn) dE[i] += dEi;
     const gl = Math.hypot(agx, agy);
     if (gl > 1e-12) { gx[i] = agx / gl; gy[i] = agy / gl; } else { gx[i] = 0; gy[i] = 0; }
   }
 
-  // 3. Death — probabilistic with soft band edges.
+  // 2b. Energy — the field regrows toward capacity, autotrophs graze it (competing as
+  //     it depletes), predation deltas land, then upkeep is paid, scaled by genome
+  //     complexity. Energy may go negative here; that becomes starvation in the death pass.
+  if (eOn) {
+    const F = state.field, K = state.fieldK, fnx = state.fieldNX, fny = state.fieldNY;
+    const regrow = P.fieldRegrow, autoGain = P.autoGain, upkeep = P.upkeep, geneCost = P.geneCost, emax = P.energyMax;
+    for (let c = 0, fc = F.length; c < fc; c++) F[c] += regrow * (K[c] - F[c]);
+    for (let i = 0; i < N; i++) {
+      const base = i * G;
+      let fx = (X[i] / Wx * fnx) | 0; if (fx >= fnx) fx = fnx - 1; else if (fx < 0) fx = 0;
+      let fy = (Y[i] / Wy * fny) | 0; if (fy >= fny) fy = fny - 1; else if (fy < 0) fy = 0;
+      const c = fy * fnx + fx, k = K[c];
+      let e = EN[i];
+      if (k > 0 && ae[i] > 0) { let take = autoGain * ae[i] * (F[c] / k); if (take > F[c]) take = F[c]; F[c] -= take; e += take; }
+      e += dE[i];
+      const st = GEN[base + GENE.step], rs = GEN[base + GENE.rScale], tx = GEN[base + GENE.taxis];
+      const tol = ((GEN[base + GENE.sHi] - GEN[base + GENE.sLo]) + (GEN[base + GENE.bHi] - GEN[base + GENE.bLo])) / 12;
+      const complexity = P.kMove * (st / R) * (st / R) + P.kSense * rs * rs + P.kTol * tol + P.kTaxis * tx * tx;
+      e -= upkeep + geneCost * complexity;
+      EN[i] = e > emax ? emax : e;
+    }
+  }
+
+  // 3. Death — probabilistic with soft band edges (plus starvation when energy is on).
   const sigma = P.sigma, maxAgeOn = P.maxAgeOn, maxAge = P.maxAge;
   for (let i = 0; i < N; i++) {
     const base = i * G, ni = n[i];
     const pSurv = smoothstep(GEN[base + GENE.sLo] - sigma, GEN[base + GENE.sLo] + sigma, ni)
       * (1 - smoothstep(GEN[base + GENE.sHi] - sigma, GEN[base + GENE.sHi] + sigma, ni));
     let alive = rng.next() < pSurv;
+    if (eOn && EN[i] <= 0) alive = false;                 // starvation
     if (alive && maxAgeOn && AGE[i] >= maxAge) alive = false;
     survive[i] = alive ? 1 : 0;
   }
@@ -323,6 +429,7 @@ export function step(state, P) {
   let bc = 0;
   const bx = s.bx, by = s.by, bg = s.bg, bl = s.bl, bspecies = s.bspecies;
   const spThr = P.speciesThreshold, gThr = P.genusThreshold;
+  const birthCost = P.birthCost, birthThreshold = birthCost * 1.4; // must bank 1.4x the investment to breed
   for (let i = 0; i < N; i++) {
     if (!survive[i]) continue;
     const base = i * G, ni = n[i];
@@ -330,14 +437,18 @@ export function step(state, P) {
       * (1 - smoothstep(GEN[base + GENE.bHi] - sigma, GEN[base + GENE.bHi] + sigma, ni));
     if (win <= 0) continue;
     let feff = GEN[base + GENE.fecundity];
-    if (P.costsOn) {
+    // When energy is off, metabolic cost discounts fecundity directly. When on, the
+    // cost is paid in energy (upkeep above) instead, and reproduction is gated on it.
+    if (P.costsOn && !eOn) {
       const st = GEN[base + GENE.step], rs = GEN[base + GENE.rScale], tx = GEN[base + GENE.taxis];
       const tol = ((GEN[base + GENE.sHi] - GEN[base + GENE.sLo]) + (GEN[base + GENE.bHi] - GEN[base + GENE.bLo])) / 12;
       const cost = P.kMove * (st / R) * (st / R) + P.kSense * rs * rs + P.kTol * tol + P.kTaxis * tx * tx;
       feff *= Math.exp(-cost);
     }
     if (rng.next() >= feff * win) continue;
+    if (eOn && EN[i] < birthThreshold) continue;          // not enough banked energy to reproduce
     if (state.count + bc >= P.cap) continue; // reject births at the hard cap
+    if (eOn) EN[i] -= birthCost;                           // parent invests energy into the child
     buildOffspring(state, i, rng, P, rr, bg, bc * G, counts, items, cellIdx, nx, ny, Wx, Wy);
     const ang = rng.next() * 6.283185307179586;
     const dd = GEN[base + GENE.dDisp], cv = GEN[base + GENE.dCV];
@@ -382,15 +493,16 @@ export function step(state, P) {
   for (let i = 0; i < N; i++) {
     if (!survive[i]) continue;
     if (w !== i) {
-      X[w] = X[i]; Y[w] = Y[i]; AGE[w] = AGE[i]; LIN[w] = LIN[i]; SPE[w] = SPE[i];
+      X[w] = X[i]; Y[w] = Y[i]; AGE[w] = AGE[i]; LIN[w] = LIN[i]; SPE[w] = SPE[i]; EN[w] = EN[i];
       const ws = w * G, bs = i * G;
       for (let g = 0; g < G; g++) GEN[ws + g] = GEN[bs + g];
     }
     w++;
   }
+  const childE = eOn ? birthCost : state.energy0;
   for (let b = 0; b < bc; b++) {
     if (w >= state.cap) break;
-    X[w] = bx[b]; Y[w] = by[b]; AGE[w] = 0; LIN[w] = bl[b]; SPE[w] = bspecies[b];
+    X[w] = bx[b]; Y[w] = by[b]; AGE[w] = 0; LIN[w] = bl[b]; SPE[w] = bspecies[b]; EN[w] = childE;
     const ws = w * G, bsrc = b * G;
     for (let g = 0; g < G; g++) GEN[ws + g] = bg[bsrc + g];
     w++;
@@ -418,5 +530,11 @@ export function computeStats(state, P) {
   vi /= G;
   const seen = new Set(), spSeen = new Set(), gSeen = new Set();
   for (let i = 0; i < N; i++) { const sp = state.species[i]; seen.add(state.lineage[i]); spSeen.add(sp); gSeen.add(state.spGenus[sp]); }
-  return { population: N, mean, sd, varianceIndex: vi, lineages: seen.size, species: spSeen.size, genera: gSeen.size };
+  // trophic split: a cell is an "animal" if its trophic gene is past the midpoint
+  let animals = 0, esum = 0;
+  for (let i = 0; i < N; i++) { if (GEN[i * G + GENE.trophic] >= 0.5) animals++; esum += state.energy[i]; }
+  return {
+    population: N, mean, sd, varianceIndex: vi, lineages: seen.size, species: spSeen.size, genera: gSeen.size,
+    animals, plants: N - animals, meanEnergy: N > 0 ? esum / N : 0,
+  };
 }
