@@ -2,13 +2,17 @@
 // lives in sim.js (DOM-free); this file is the instrument panel around it.
 import {
   createState, resetState, addAgent, step, computeStats, foundClade, buildField,
-  geneRanges, DEFAULTS, G, GENE, GENE_NAMES,
+  geneRanges, DEFAULTS, MAXCAP, G, GENE, GENE_NAMES,
 } from './sim.js';
 import { draw, phenotypeHSL, hslToRgb } from './render.js';
 
 // ---- state ----------------------------------------------------------------
 const P = Object.assign({}, DEFAULTS);
-const state = createState(P.cap);
+const state = createState(MAXCAP);   // arrays sized to the buffer ceiling; P.cap is the soft limit
+// The resource-field pattern gets a fresh seed on every reset / energy activation, so
+// the flora distribution is different each time (seeded off the clock, then advanced).
+let fieldNonce = Date.now() >>> 0;
+const freshFieldSeed = () => { fieldNonce = (fieldNonce + 0x9e3779b1) >>> 0; return fieldNonce; };
 const view = { scale: 1, ox: 0, oy: 0 };
 const ui = { playing: false, colorMode: 'phenotype', showLines: true, lineCap: 20000, hovered: -1 };
 const init = { population: 6000, layout: 'uniform', k: 6, genomeInit: 'tworand', spread: 0.03, blobN: 60, blobJitter: 26, seed: 12345 };
@@ -89,6 +93,8 @@ const HELP = {
   sigma: 'Band-edge softness. Birth/death thresholds are fuzzy, not hard: σ is the half-width of the smooth transition around each bound. Small σ ≈ crisp, Conway-like rules; large σ = gradual.',
   maxAgeToggle: 'When on, cells also die of old age once they pass "max age". Off by default — death is otherwise purely density-driven.',
   maxAge: 'Ticks a cell can live before dying of old age (only when max-age death is on).',
+  maxPop: 'Maximum living population — births are rejected above it. The ecology often self-limits below it anyway; raise it for denser worlds. The hard ceiling is the array buffer (50k cells).',
+  capOff: 'Remove the population limit: let the world grow until it hits the buffer ceiling (50k cells, where births are rejected to protect memory and framerate). Large populations run slower.',
   costs: 'Metabolic cost. When ON, sensing far, moving fast, tolerating a wide density range, and steering all reduce fecundity. Turn it OFF to watch every gene run to its extreme and the board collapse into a grey monoculture — the degenerate attractor.',
   kMove: 'Cost weight on motility (step²). Higher makes fast movement more expensive in offspring.',
   kSense: 'Cost weight on perception (rScale²). Higher makes seeing far more expensive.',
@@ -114,7 +120,7 @@ const HELP = {
   geneCost: 'Extra upkeep charged per unit of genome complexity (far perception, fast motility, wide tolerance, strong steering). This is the "greater features cost more food" term — elaborate cells must out-feed simple ones to survive.',
   birthCost: 'Energy a parent invests into each offspring (the child starts life with it). A cell must bank ~1.4× this to breed, so reproduction is a real energy decision, not free.',
   lines: 'Draw a link between cells that perceive each other. Solid = mutual perception, dashed = one-way (a real consequence of different rScale). Line opacity follows perception strength, so links fade in and out as cells drift.',
-  seed: 'Random seed. The same seed plus the same parameters reproduces a run exactly.',
+  seed: 'Random seed. The same seed plus the same parameters reproduces a run exactly (the resource field is re-randomized on every reset, so trophic runs vary each time).',
   play: 'Run or pause the simulation. (Space)',
   stepBtn: 'Advance exactly one tick. (.)',
   reset: 'Clear and re-seed the population using the Initialize settings below. (R)',
@@ -187,10 +193,14 @@ function buildSide() {
 
   // Rules
   const ageBtn = button('max-age death', () => { P.maxAgeOn = !P.maxAgeOn; ageBtn.classList.toggle('on', P.maxAgeOn); }, P.maxAgeOn ? 'on' : '', HELP.maxAgeToggle);
+  const capBtn = button('unlimited', () => { P.capOff = !P.capOff; capBtn.classList.toggle('on', P.capOff); }, P.capOff ? 'on' : '', HELP.capOff);
+  const kfmt = (v) => (v >= 1000 ? (v / 1000) + 'k' : String(v));
   side.append(section('Rules', [
     slider('softness σ', 0, 2, 0.05, () => P.sigma, (v) => P.sigma = v, f2, HELP.sigma),
     el('div', { class: 'row' }, [ageBtn]),
     slider('max age', 50, 2000, 10, () => P.maxAge, (v) => P.maxAge = v, (v) => v.toFixed(0), HELP.maxAge),
+    slider('max pop', 1000, MAXCAP, 1000, () => P.cap, (v) => P.cap = v, kfmt, HELP.maxPop),
+    el('div', { class: 'row' }, [capBtn]),
   ], 'live'));
 
   // Costs
@@ -208,7 +218,7 @@ function buildSide() {
   // Trophic / energy
   const enToggle = button(P.energyOn ? 'energy ON' : 'energy OFF', () => {
     P.energyOn = !P.energyOn; enToggle.textContent = P.energyOn ? 'energy ON' : 'energy OFF'; enToggle.classList.toggle('on', P.energyOn);
-    if (P.energyOn) { P.fieldSeed = init.seed | 0; buildField(state, P); }
+    if (P.energyOn) { P.fieldSeed = freshFieldSeed(); buildField(state, P); }
   }, P.energyOn ? 'on' : '', HELP.energy);
   side.append(section('Trophic / energy', [
     el('div', { class: 'row' }, [enToggle]),
@@ -259,7 +269,7 @@ function buildSide() {
 
   // Initialize
   side.append(section('Initialize', [
-    slider('population', 100, P.cap, 100, () => init.population, (v) => init.population = v, (v) => v.toFixed(0), HELP.population),
+    slider('population', 100, P.capOff ? MAXCAP : P.cap, 100, () => init.population, (v) => init.population = v, (v) => v.toFixed(0), HELP.population),
     ctrlSelect('layout', [['uniform', 'uniform'], ['blob', 'central blob'], ['kblobs', 'k blobs'], ['ring', 'ring'], ['lattice', 'jittered lattice']], init.layout, (v) => init.layout = v, HELP.layout),
     ctrlSelect('genome', [['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B'], ['tworand', 'two random']], init.genomeInit, (v) => init.genomeInit = v, HELP.genomeInit),
     slider('spread', 0, 0.15, 0.005, () => init.spread, (v) => init.spread = v, (v) => v.toFixed(3), HELP.spread),
@@ -371,7 +381,7 @@ function drawSparks(s) {
 function applyInit() {
   resetState(state, init.seed | 0);
   state.energy0 = P.energyMax * 0.5;
-  P.fieldSeed = init.seed | 0;
+  P.fieldSeed = freshFieldSeed();   // a new flora pattern each reset
   const rr = geneR(), Wx = P.worldW, Wy = P.worldH, Dm = Math.min(Wx, Wy), n = init.population, rng = state.rng;
   const wx_ = (v) => ((v % Wx) + Wx) % Wx, wy_ = (v) => ((v % Wy) + Wy) % Wy;
   const place = (x, y, g, lin, sp) => addAgent(state, wx_(x), wy_(y), g, lin, rr, sp);
@@ -566,7 +576,7 @@ function resize() {
   }
   brush[GENE.dDisp] *= s; brush[GENE.step] *= s;   // keep the brush R-relative too
   P.R = newR; P._rangesR = -1;                      // force sim to recompute gene ranges
-  if (P.energyOn) { P.fieldSeed = P.fieldSeed != null ? P.fieldSeed : (init.seed | 0); buildField(state, P); } // field follows the new dims
+  if (P.energyOn) { if (P.fieldSeed == null) P.fieldSeed = freshFieldSeed(); buildField(state, P); } // rebuild at new dims, same pattern
   if (oldW) buildSide();
 }
 window.addEventListener('resize', resize);

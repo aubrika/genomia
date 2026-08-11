@@ -67,8 +67,14 @@ export const DEFAULTS = {
   geneCost: 0.03,         // extra upkeep per unit genome complexity (perception, motility, tolerance, steering)
   birthCost: 2.0,         // energy a parent invests into each offspring (the child starts with it)
   energyMax: 12,          // cap on stored energy
-  cap: 12000,
+  cap: 20000,             // soft population limit: births are rejected above it (<= MAXCAP)
+  capOff: false,          // true = no soft limit; the population runs up to the MAXCAP buffer ceiling
 };
+
+// Physical buffer size the typed arrays are allocated to. The soft `cap` limits births
+// below this; "unlimited" means running up to this ceiling (arrays can't grow past it,
+// so births are still rejected here to protect memory and framerate).
+export const MAXCAP = 50000;
 
 // Normalized genetic distance: RMS of per-gene differences scaled by each gene's
 // range, so it sits in ~[0,1] and every gene contributes comparably.
@@ -449,6 +455,7 @@ export function step(state, P) {
   const bx = s.bx, by = s.by, bg = s.bg, bl = s.bl, bspecies = s.bspecies;
   const spThr = P.speciesThreshold, gThr = P.genusThreshold;
   const birthCost = P.birthCost, birthThreshold = birthCost * 1.4; // must bank 1.4x the investment to breed
+  const popCap = P.capOff ? state.cap : (P.cap < state.cap ? P.cap : state.cap); // soft limit, never above the buffer
   for (let i = 0; i < N; i++) {
     if (!survive[i]) continue;
     const base = i * G, ni = n[i];
@@ -466,7 +473,7 @@ export function step(state, P) {
     }
     if (rng.next() >= feff * win) continue;
     if (eOn && EN[i] < birthThreshold) continue;          // not enough banked energy to reproduce
-    if (state.count + bc >= P.cap) continue; // reject births at the hard cap
+    if (state.count + bc >= popCap) continue; // reject births at the (soft or buffer) cap
     if (eOn) EN[i] -= birthCost;                           // parent invests energy into the child
     buildOffspring(state, i, rng, P, rr, bg, bc * G, counts, items, cellIdx, nx, ny, Wx, Wy);
     const ang = rng.next() * 6.283185307179586;
