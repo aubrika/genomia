@@ -4,7 +4,8 @@ import {
   createState, resetState, addAgent, step, computeStats, foundClade, buildField,
   geneRanges, DEFAULTS, MAXCAP, G, GENE, GENE_NAMES,
 } from './sim.js';
-import { draw, phenotypeHSL, hslToRgb } from './render.js';
+import { draw, hslToRgb } from './render.js';
+import { createGLRenderer } from './render_gl.js';
 
 // ---- state ----------------------------------------------------------------
 const P = Object.assign({}, DEFAULTS);
@@ -550,7 +551,12 @@ function copyHovered() {
 
 // ---- canvas / view --------------------------------------------------------
 const canvas = $('#canvas');
-const ctx = canvas.getContext('2d', { alpha: false });
+// Prefer WebGL2 (one draw call for all cells — scales to the "unlimited" cap); fall
+// back to the Canvas2D renderer if it's unavailable or forced off with #no-gl.
+const glRenderer = location.hash.includes('no-gl') ? null : createGLRenderer(canvas);
+let renderFn, rendererName;
+if (glRenderer) { renderFn = (s, pp, v, u) => glRenderer.draw(s, pp, v, u); rendererName = 'webgl2'; }
+else { const ctx = canvas.getContext('2d', { alpha: false }); renderFn = (s, pp, v, u) => draw(ctx, s, pp, v, u); rendererName = 'canvas2d'; }
 // The world is the habitat canvas: a rectangular torus the size of the canvas, drawn
 // 1:1 (scale 1, no letterbox). The canvas occupies the top-left region (the fixed UI
 // panels sit beside and below it, not over it — see style.css). Perception radius R
@@ -669,13 +675,13 @@ function singleStep() { step(state, P); pushHist(computeStats(state, P)); }
 let fpsT = 0, fpsN = 0, fps = 0;
 function frame(t) {
   if (ui.playing) step(state, P);
-  draw(ctx, state, P, view, ui);
+  renderFn(state, P, view, ui);
   const s = computeStats(state, P);
   if (ui.playing) pushHist(s);
   drawSparks(s);
   fpsN++; if (t - fpsT > 500) { fps = Math.round(fpsN * 1000 / (t - fpsT)); fpsN = 0; fpsT = t; }
   const troph = P.energyOn ? ` · plants <b>${s.plants}</b> · animals <b>${s.animals}</b> · e̅ <b>${s.meanEnergy.toFixed(1)}</b>` : '';
-  $('#hud').innerHTML = `tick <b>${state.tick}</b> · pop <b>${state.count}</b> · lineages <b>${s.lineages}</b> · genera <b>${s.genera}</b>${troph} · ${fps} fps${ui.playing ? '' : ' · <b>paused</b>'}`;
+  $('#hud').innerHTML = `tick <b>${state.tick}</b> · pop <b>${state.count}</b> · lineages <b>${s.lineages}</b> · genera <b>${s.genera}</b>${troph} · ${fps} fps · ${rendererName}${ui.playing ? '' : ' · <b>paused</b>'}`;
   requestAnimationFrame(frame);
 }
 

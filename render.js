@@ -108,33 +108,40 @@ const GROUND = '#12100E';
 // population has grazed. The marks are on a jittered (non-aligned) grid, so the
 // distribution reads organic with no blocky grid.
 
-// Static flora positions, regenerated only when the habitat size or field seed changes.
-let flora = null, floraN = 0, floraKey = '';
-function ensureFlora(cw, ch, seed) {
-  const key = cw + 'x' + ch + '@' + seed;
-  if (key === floraKey && flora) return;
-  floraKey = key;
+// Static flora marks on a jittered (non-aligned) grid: x, y, base radius, colour tint,
+// and an occasional "flower" flag. Pure — callers cache by (size, seed). Shared by both
+// renderers so the flora look identical.
+export function makeFlora(cw, ch, seed) {
   const spacing = 15;                                    // ~px between flora
   const gx = Math.max(1, Math.floor(cw / spacing)), gy = Math.max(1, Math.floor(ch / spacing));
-  floraN = gx * gy;
-  flora = new Float32Array(floraN * 5);                  // x, y, size, tint, kind(0 grass/1 flower)
+  const n = gx * gy, arr = new Float32Array(n * 5);      // x, y, size, tint, kind(0 grass/1 flower)
   const rng = makeRNG((seed ^ 0x1b56c4e9) >>> 0);
   const cellW = cw / gx, cellH = ch / gy;
   let k = 0;
   for (let j = 0; j < gy; j++) {
     for (let i = 0; i < gx; i++) {
-      flora[k * 5] = (i + 0.5 + (rng.next() - 0.5) * 1.6) * cellW; // ±0.8 cell jitter → organic, non-grid
-      flora[k * 5 + 1] = (j + 0.5 + (rng.next() - 0.5) * 1.6) * cellH;
-      flora[k * 5 + 2] = 0.8 + rng.next() * 1.3;         // base radius
-      flora[k * 5 + 3] = rng.next() * 2 - 1;             // colour tint
-      flora[k * 5 + 4] = rng.next() < 0.05 ? 1 : 0;      // occasional flower
+      arr[k * 5] = (i + 0.5 + (rng.next() - 0.5) * 1.6) * cellW; // ±0.8 cell jitter → organic, non-grid
+      arr[k * 5 + 1] = (j + 0.5 + (rng.next() - 0.5) * 1.6) * cellH;
+      arr[k * 5 + 2] = 0.8 + rng.next() * 1.3;           // base radius
+      arr[k * 5 + 3] = rng.next() * 2 - 1;               // colour tint
+      arr[k * 5 + 4] = rng.next() < 0.05 ? 1 : 0;        // occasional flower
       k++;
     }
   }
+  return { arr, n };
+}
+
+// Canvas-2D renderer's cached flora.
+let flora = null, floraN = 0, floraKey = '';
+function ensureFlora(cw, ch, seed) {
+  const key = cw + 'x' + ch + '@' + seed;
+  if (key === floraKey && flora) return;
+  floraKey = key;
+  const f = makeFlora(cw, ch, seed); flora = f.arr; floraN = f.n;
 }
 
 // Bilinear sample of resource-remaining (F normalized by max capacity) at world (wx,wy).
-function sampleField(F, fnx, fny, Wx, Wy, inv, wx, wy) {
+export function sampleField(F, fnx, fny, Wx, Wy, inv, wx, wy) {
   const fu = wx / Wx * fnx - 0.5, fv = wy / Wy * fny - 0.5;
   const ix = Math.floor(fu), iy = Math.floor(fv), rx = fu - ix, ry = fv - iy;
   const x0 = ((ix % fnx) + fnx) % fnx, x1 = (x0 + 1) % fnx, y0 = ((iy % fny) + fny) % fny, y1 = (y0 + 1) % fny;
@@ -210,7 +217,11 @@ export function draw(ctx, state, P, view, opts) {
   if (opts.hovered != null && opts.hovered >= 0 && opts.hovered < N) drawHover(ctx, state, P, view, opts.hovered);
 }
 
-function drawLines(ctx, state, P, view, opts) {
+// Build adjacency pairs (each unordered pair once) on a uniform grid, with a
+// nearest-first cap. Fills module scratch: pI/pJ endpoints, pW kernel weight, pM
+// mutual flag; returns those plus an optional nearest-first `order` and the count np.
+// Shared by the Canvas-2D and WebGL renderers.
+export function computePairs(state, P, lineCap) {
   const N = state.count, GEN = state.genome, R = P.R;
   const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
   const halfWx = Wx / 2, halfWy = Wy / 2;
@@ -255,14 +266,16 @@ function drawLines(ctx, state, P, view, opts) {
       }
     }
   }
-
-  // nearest-first cap
-  const cap = opts.lineCap || 20000;
+  const cap = lineCap || 20000;
   let order = null;
-  if (np > cap) {
-    order = Array.from({ length: np }, (_, k) => k).sort((a, b) => pD[a] - pD[b]);
-    np = cap;
-  }
+  if (np > cap) { order = Array.from({ length: np }, (_, k) => k).sort((a, b) => pD[a] - pD[b]); np = cap; }
+  return { pI, pJ, pW, pM, order, np };
+}
+
+function drawLines(ctx, state, P, view, opts) {
+  const { pI, pJ, pW, pM, order, np } = computePairs(state, P, opts.lineCap);
+  const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
+  const halfWx = Wx / 2, halfWy = Wy / 2, X = state.x, Y = state.y;
   const { scale, ox, oy } = view;
   const idx = (k) => (order ? order[k] : k);
 

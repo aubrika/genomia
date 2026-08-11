@@ -43,7 +43,10 @@ cell to read its genome.
 - `sim.js` — DOM-free simulation core (typed-array state, seeded PRNG, `step()`);
   written to port to Rust.
 - `prng.js` — seeded mulberry32; a seed plus parameters reproduces a run exactly.
-- `render.js` — Canvas 2D: color, the flora field, adjacency lines.
+- `render.js` — Canvas 2D renderer (color, the flora field, adjacency lines); also
+  the fallback.
+- `render_gl.js` — WebGL2 renderer: all cells / flora / lines as GPU point-sprites and
+  lines, one draw call each. Used automatically when available; force it off with `#no-gl`.
 - `main.js` — UI, interaction, loop.
 
 `gjs -m smoketest.js` runs a headless regression over the core (reproducibility,
