@@ -1,4 +1,4 @@
-// Genomic Particle Life — simulation core.
+// Genomia — simulation core.
 //
 // DOM-free by contract: this module knows nothing about canvas, events, or the
 // document. It exports pure-ish operations over a Structure-of-Arrays `state`

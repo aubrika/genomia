@@ -1,4 +1,6 @@
-# Genomic Particle Life
+# Genomia
+
+*A little world of evolving genomes.*
 
 A browser simulator for a continuous-space, stochastic, Conway-derived system in
 which every cell carries an evolvable eleven-gene genome. Cells are points on a torus
