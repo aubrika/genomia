@@ -10,11 +10,11 @@ import { makeRNG } from './prng.js';
 // A degenerate (grey) genome falls out literally grey — a useful diagnostic.
 export function phenotypeHSL(genome, base, R) {
   let m = (genome[base + GENE.sLo] + genome[base + GENE.sHi]) / 2;
-  if (m < 0) m = 0; else if (m > 8) m = 8;
-  const hue = 210 - 195 * (m / 8);                    // 210° solitary → 15° crowd
+  if (m < 0) m = 0; else if (m > 6) m = 6;
+  const hue = 210 - 195 * (m / 6);                    // 210° solitary → 15° crowd
   let br = genome[base + GENE.sHi] - genome[base + GENE.sLo];
-  if (br < 0) br = 0; else if (br > 8) br = 8;
-  const sat = 85 - 73 * (br / 8);                     // 85% specialist → 12% generalist
+  if (br < 0) br = 0; else if (br > 6) br = 6;
+  const sat = 85 - 73 * (br / 6);                     // 85% specialist → 12% generalist
   let mot = genome[base + GENE.step] / (0.3 * R);
   if (mot < 0) mot = 0; else if (mot > 1) mot = 1;
   const light = 38 + 34 * mot;                        // 38% sessile → 72% motile

@@ -21,9 +21,10 @@ export function geneRanges(R) {
   return [
     [0.5, 1.5],   // rScale
     [0, 6],       // sLo
-    [0, 12],      // sHi
+    [0, 6],       // sHi — overcrowding ceiling: max density a cell can survive. Capped (was 12) so
+                  //       cells can't evolve to tolerate extreme crowding; dense clumps self-limit.
     [0, 6],       // bLo
-    [0, 12],      // bHi
+    [0, 6],       // bHi
     [0, 0.30],    // fecundity
     [0.2 * R, 3 * R], // dDisp
     [0, 1.0],     // dCV

@@ -472,22 +472,22 @@ const PRESETS = [
     init: { layout: 'lattice', genomeInit: 'brush', population: 11000, spread: 0.03 },
   },
   { // Gray goo
-    brush: { rScale: 1.2, sLo: 0.0, sHi: 12, bLo: 0.0, bHi: 12, fec: 0.30, dDisp: 1.0, dCV: 0.3, step: 0.10, taxis: 0.0 },
+    brush: { rScale: 1.2, sLo: 0.0, sHi: 6, bLo: 0.0, bHi: 6, fec: 0.30, dDisp: 1.0, dCV: 0.3, step: 0.10, taxis: 0.0 },
     P: { costsOn: false, recomb: 'crossover', mutation: 'gaussian' },
     init: { layout: 'uniform', genomeInit: 'uniform', population: 6000 },
   },
   { // Blend collapse
-    brush: { rScale: 1.0, sLo: 1.5, sHi: 7.0, bLo: 2.5, bHi: 7.0, fec: 0.22, dDisp: 0.8, dCV: 0.3, step: 0.15, taxis: 0.6 },
+    brush: { rScale: 1.0, sLo: 1.5, sHi: 6.0, bLo: 2.5, bHi: 6.0, fec: 0.22, dDisp: 0.8, dCV: 0.3, step: 0.15, taxis: 0.6 },
     P: { costsOn: true, recomb: 'blend', mutation: 'gaussian' },
     init: { layout: 'kblobs', genomeInit: 'brush', population: 7000 },
   },
   { // Motile swarm
-    brush: { rScale: 1.0, sLo: 1.0, sHi: 8.0, bLo: 2.0, bHi: 8.0, fec: 0.20, dDisp: 0.7, dCV: 0.3, step: 0.22, taxis: 0.7 },
+    brush: { rScale: 1.0, sLo: 1.0, sHi: 6.0, bLo: 2.0, bHi: 6.0, fec: 0.20, dDisp: 0.7, dCV: 0.3, step: 0.22, taxis: 0.7 },
     P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian' },
     init: { layout: 'uniform', genomeInit: 'brush', population: 6000 },
   },
   { // Allee frontier
-    brush: { rScale: 1.0, sLo: 3.5, sHi: 8.0, bLo: 3.2, bHi: 8.0, fec: 0.20, dDisp: 0.45, dCV: 0.25, step: 0.05, taxis: 0.2 },
+    brush: { rScale: 1.0, sLo: 3.5, sHi: 6.0, bLo: 3.2, bHi: 6.0, fec: 0.20, dDisp: 0.45, dCV: 0.25, step: 0.05, taxis: 0.2 },
     P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian' },
     init: { layout: 'blob', genomeInit: 'brush', population: 8000 },
   },
@@ -509,7 +509,7 @@ const PRESETS = [
   { // Trophic web — the energy model on over a patchy resource field. One mixed lineage
     // under strong specialization selection (trophicExp) splits into green autotroph
     // "plants" grazing the field and red heterotroph "animals" preying on them.
-    brush: { rScale: 1.0, sLo: 0.0, sHi: 7.0, bLo: 0.2, bHi: 7.0, fec: 0.5, dDisp: 0.45, dCV: 0.4, step: 0.06, taxis: 0.3, trophic: 0.05 },
+    brush: { rScale: 1.0, sLo: 0.0, sHi: 6.0, bLo: 0.2, bHi: 6.0, fec: 0.5, dDisp: 0.45, dCV: 0.4, step: 0.06, taxis: 0.3, trophic: 0.05 },
     P: {
       costsOn: true, recomb: 'crossover', mutation: 'gaussian', sigma: 0.3, mu: 0.14, sigmaG: 0.06, macroRate: 0.05,
       energyOn: true, fieldContrast: 0.8, fieldRegrow: 0.20, autoGain: 1.1, predRate: 0.6, predGain: 0.6, trophicExp: 2.0, upkeep: 0.02, geneCost: 0.03, birthCost: 2.0,
