@@ -18,7 +18,7 @@ html, body { height: 100%; margin: 0; background: var(--ground); color: var(--in
 /* The habitat occupies its own region — the top-left rectangle left of the side
    panel and above the bottom bar — so the fixed UI never covers live particles. */
 #stage { position: fixed; top: 0; left: 0; right: var(--side); bottom: var(--bottom); overflow: hidden; }
-#canvas { display: block; width: 100%; height: 100%; }
+#canvas { display: block; width: 100%; height: 100%; touch-action: none; }  /* drags paint, not scroll */
 
 #side {
   position: fixed; top: 0; right: 0; height: 100vh; width: var(--side); z-index: 3;
@@ -99,3 +99,44 @@ input[type=number], input[type=text] { cursor: text; width: 100%; }
 #hud { position: absolute; top: 16px; left: 18px; z-index: 4; color: var(--muted); font-size: 18px; letter-spacing: 0.06em; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.6); }
 #hud b { color: var(--ink); }
 kbd { color: var(--ink); background: var(--panel); border: 1px solid var(--divider); border-radius: 4px; padding: 0 6px; }
+
+#starthint {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 4; display: none; pointer-events: none;
+  padding: 12px 22px; border: 1px solid var(--divider); border-radius: 999px; background: rgba(18,16,14,0.88);
+  color: var(--muted); font-size: 18px; white-space: nowrap; box-shadow: 0 6px 22px rgba(0,0,0,0.5);
+}
+#starthint b { color: var(--ink); font-weight: 500; }
+
+.about { padding: 14px 18px 22px; margin: 0; }
+.about a { color: var(--muted); text-decoration: underline; text-decoration-color: var(--divider); text-underline-offset: 3px; }
+.about a:hover { color: var(--accent); }
+.grid2 { margin-top: 10px; }
+
+/* Mid-width windows: a slimmer panel so the habitat keeps most of the screen. */
+@media (max-width: 1280px) {
+  :root { --side: 430px; --bottom: 160px; }
+  html, body { font-size: 19px; }
+  button, select, input[type=number], input[type=text] { font-size: 18px; }
+  .ctrl { grid-template-columns: 116px 1fr 64px; gap: 10px; }
+  .hint { font-size: 15px; }
+}
+
+/* Narrow screens (phones, split-screen): stack the habitat, the sparklines, and the
+   controls vertically and let the page scroll. The habitat uses svh so a mobile URL
+   bar sliding in and out doesn't resize (and rescale) the world. */
+@media (max-width: 900px) {
+  html, body { height: auto; overflow-x: hidden; overflow-y: auto; font-size: 16px; }
+  #stage { position: relative; right: auto; bottom: auto; width: 100%; height: 62vh; height: 62svh; }
+  #bottom { position: relative; width: 100%; height: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; }
+  .spark { height: 92px; border-bottom: 1px solid var(--divider); }
+  .spark .val { font-size: 15px; }
+  #side { position: static; width: 100%; height: auto; border-left: none; overflow: visible; }
+  section { padding: 14px 16px; }
+  section > h2 { font-size: 15px; }
+  button, select, input[type=number], input[type=text] { font-size: 16px; }   /* 16px: iOS won't zoom on focus */
+  .ctrl { grid-template-columns: 104px 1fr 56px; gap: 10px; }
+  .hint { font-size: 14px; }
+  #hud { font-size: 13px; top: 10px; left: 12px; right: 12px; }
+  #starthint { font-size: 15px; }
+  #tooltip { font-size: 14px; padding: 9px 12px; }
+}

@@ -1,0 +1,1 @@
+{ "name": "genomia", "private": true, "type": "module", "scripts": { "test": "node smoketest.js" } }

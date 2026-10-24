@@ -106,7 +106,7 @@ export function createGLRenderer(canvas) {
     const N = state.count, GEN = state.genome, R = P.R;
     const X = state.x, Y = state.y;
     const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
-    const halfWx = Wx / 2, halfWy = Wy / 2;
+    const halfWx = Wx / 2, halfWy = Wy / 2, px = view.scale;   // px = device pixels per world unit
 
     gl.viewport(0, 0, cw, ch);
     gl.useProgram(prog); gl.bindVertexArray(vao);
@@ -130,7 +130,7 @@ export function createGLRenderer(canvas) {
     }
 
     // 1. flora field (under everything)
-    if (P.energyOn && state.field) drawFlora(state, P);
+    if (P.energyOn && state.field) drawFlora(state, P, px);
 
     // 2. adjacency lines
     if (opts.showLines && N > 1) drawGlLines(state, P, opts, X, Y, Wx, Wy, halfWx, halfWy);
@@ -140,19 +140,18 @@ export function createGLRenderer(canvas) {
       sPos[i * 2] = X[i]; sPos[i * 2 + 1] = Y[i];
       sCol[i * 4] = cellCol[i * 4]; sCol[i * 4 + 1] = cellCol[i * 4 + 1]; sCol[i * 4 + 2] = cellCol[i * 4 + 2]; sCol[i * 4 + 3] = 255;
     }
-    flush(gl.POINTS, N, 1, 0, false, CELL_SIZE);
+    flush(gl.POINTS, N, 1, 0, false, CELL_SIZE * px);
 
     // 4. hover overlay
     const h = opts.hovered;
-    if (h != null && h >= 0 && h < N) drawHover(state, P, h, X, Y, Wx, Wy, halfWx, halfWy);
+    if (h != null && h >= 0 && h < N) drawHover(state, P, h, X, Y, Wx, Wy, halfWx, halfWy, px);
   }
 
-  function drawFlora(state, P) {
+  function drawFlora(state, P, px) {
     const F = state.field, K = state.fieldK, fnx = state.fieldNX, fny = state.fieldNY;
-    const cw = canvas.width, ch = canvas.height;
     const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
-    const key = cw + 'x' + ch + '@' + (state._fieldSeed >>> 0);
-    if (key !== floraKey || !floraArr) { const f = makeFlora(cw, ch, state._fieldSeed >>> 0); floraArr = f.arr; floraN = f.n; floraKey = key; }
+    const key = Wx + 'x' + Wy + '@' + (state._fieldSeed >>> 0);
+    if (key !== floraKey || !floraArr) { const f = makeFlora(Wx, Wy, state._fieldSeed >>> 0); floraArr = f.arr; floraN = f.n; floraKey = key; }
     grow(floraN);
     let kmax = 1e-3; for (let c = 0; c < K.length; c++) if (K[c] > kmax) kmax = K[c];
     const inv = 1 / kmax;
@@ -168,7 +167,7 @@ export function createGLRenderer(canvas) {
       const a = (0.16 + 0.42 * v) * 255;
       sPos[m * 2] = x; sPos[m * 2 + 1] = y;
       sCol[m * 4] = clamp255(r); sCol[m * 4 + 1] = clamp255(g); sCol[m * 4 + 2] = clamp255(b); sCol[m * 4 + 3] = clamp255(a);
-      sSize[m] = size * 2;   // radius → point diameter
+      sSize[m] = size * 2 * px;   // radius → point diameter, in device pixels
       m++;
     }
     flush(gl.POINTS, m, 1, 0, true, 0);
@@ -192,10 +191,10 @@ export function createGLRenderer(canvas) {
     flush(gl.LINES, m, 0, 0, false, 1);
   }
 
-  function drawHover(state, P, h, X, Y, Wx, Wy, halfWx, halfWy) {
+  function drawHover(state, P, h, X, Y, Wx, Wy, halfWx, halfWy, px) {
     const GEN = state.genome, R = P.R, N = state.count;
     const ri = R * GEN[h * G + GENE.rScale];
-    grow(N + 4);
+    grow(2 * N + 4);   // two vertices per link
     // this cell's links, bright
     let m = 0;
     for (let j = 0; j < N; j++) {
@@ -210,7 +209,7 @@ export function createGLRenderer(canvas) {
     }
     flush(gl.LINES, m, 0, 0, false, 1);
     // amber ring on the hovered cell
-    sPos[0] = X[h]; sPos[1] = Y[h]; setCol(0, 201, 135, 58, 255); sSize[0] = 13;
+    sPos[0] = X[h]; sPos[1] = Y[h]; setCol(0, 201, 135, 58, 255); sSize[0] = 13 * px;
     flush(gl.POINTS, 1, 1, 1, true, 0);
   }
 

@@ -111,12 +111,12 @@ const GROUND = '#12100E';
 // Static flora marks on a jittered (non-aligned) grid: x, y, base radius, colour tint,
 // and an occasional "flower" flag. Pure — callers cache by (size, seed). Shared by both
 // renderers so the flora look identical.
-export function makeFlora(cw, ch, seed) {
-  const spacing = 15;                                    // ~px between flora
-  const gx = Math.max(1, Math.floor(cw / spacing)), gy = Math.max(1, Math.floor(ch / spacing));
+export function makeFlora(Wx, Wy, seed) {
+  const spacing = 15;                                    // ~world units (CSS px) between flora
+  const gx = Math.max(1, Math.floor(Wx / spacing)), gy = Math.max(1, Math.floor(Wy / spacing));
   const n = gx * gy, arr = new Float32Array(n * 5);      // x, y, size, tint, kind(0 grass/1 flower)
   const rng = makeRNG((seed ^ 0x1b56c4e9) >>> 0);
-  const cellW = cw / gx, cellH = ch / gy;
+  const cellW = Wx / gx, cellH = Wy / gy;
   let k = 0;
   for (let j = 0; j < gy; j++) {
     for (let i = 0; i < gx; i++) {
@@ -133,11 +133,11 @@ export function makeFlora(cw, ch, seed) {
 
 // Canvas-2D renderer's cached flora.
 let flora = null, floraN = 0, floraKey = '';
-function ensureFlora(cw, ch, seed) {
-  const key = cw + 'x' + ch + '@' + seed;
+function ensureFlora(Wx, Wy, seed) {
+  const key = Wx + 'x' + Wy + '@' + seed;
   if (key === floraKey && flora) return;
   floraKey = key;
-  const f = makeFlora(cw, ch, seed); flora = f.arr; floraN = f.n;
+  const f = makeFlora(Wx, Wy, seed); flora = f.arr; floraN = f.n;
 }
 
 // Bilinear sample of resource-remaining (F normalized by max capacity) at world (wx,wy).
@@ -152,10 +152,8 @@ export function sampleField(F, fnx, fny, Wx, Wy, inv, wx, wy) {
 function drawField(ctx, state, P, view) {
   const F = state.field, K = state.fieldK, fnx = state.fieldNX, fny = state.fieldNY;
   if (!F) return;
-  const cw = ctx.canvas.width, ch = ctx.canvas.height;
   const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
-  const { scale, ox, oy } = view;
-  ensureFlora(cw, ch, state._fieldSeed >>> 0);
+  ensureFlora(Wx, Wy, state._fieldSeed >>> 0);
   let kmax = 1e-3;
   for (let c = 0; c < K.length; c++) if (K[c] > kmax) kmax = K[c];
   const inv = 1 / kmax;
@@ -173,7 +171,7 @@ function drawField(ctx, state, P, view) {
     const a = 0.16 + 0.42 * v;
     ctx.fillStyle = `rgba(${r | 0},${g | 0},${b | 0},${a.toFixed(3)})`;
     ctx.beginPath();
-    ctx.arc(ox + x * scale, oy + y * scale, size, 0, 6.283185307179586);
+    ctx.arc(x, y, size, 0, 6.283185307179586);
     ctx.fill();
   }
 }
@@ -183,10 +181,12 @@ export function draw(ctx, state, P, view, opts) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = GROUND;
   ctx.fillRect(0, 0, cw, ch);
+  // Everything below draws in world coordinates (CSS px); the view transform maps them
+  // to backing-store pixels, so radii and line widths stay crisp at any devicePixelRatio.
+  ctx.setTransform(view.scale, 0, 0, view.scale, view.ox, view.oy);
   if (P.energyOn) drawField(ctx, state, P, view);
 
   const N = state.count, GEN = state.genome, R = P.R;
-  const { scale, ox, oy } = view;
   ensureColor(state.cap);
   const treeMode = opts.colorMode === 'lineage';
   const trophicMode = opts.colorMode === 'trophic';
@@ -210,7 +210,7 @@ export function draw(ctx, state, P, view, opts) {
   for (let i = 0; i < N; i++) {
     ctx.fillStyle = `rgb(${rB[i]},${gB[i]},${bB[i]})`;
     ctx.beginPath();
-    ctx.arc(ox + X[i] * scale, oy + Y[i] * scale, 2.5, 0, 6.283185307179586);
+    ctx.arc(X[i], Y[i], 2.5, 0, 6.283185307179586);
     ctx.fill();
   }
 
@@ -276,7 +276,6 @@ function drawLines(ctx, state, P, view, opts) {
   const { pI, pJ, pW, pM, order, np } = computePairs(state, P, opts.lineCap);
   const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
   const halfWx = Wx / 2, halfWy = Wy / 2, X = state.x, Y = state.y;
-  const { scale, ox, oy } = view;
   const idx = (k) => (order ? order[k] : k);
 
   // two passes to avoid per-line dash state changes: solid mutual, then dashed one-way
@@ -294,8 +293,8 @@ function drawLines(ctx, state, P, view, opts) {
       ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
       ctx.lineWidth = 0.6 + 1.0 * w;
       ctx.beginPath();
-      ctx.moveTo(ox + X[i] * scale, oy + Y[i] * scale);
-      ctx.lineTo(ox + (X[i] + dx) * scale, oy + (Y[i] + dy) * scale); // min-image endpoint (draws the short way across the torus)
+      ctx.moveTo(X[i], Y[i]);
+      ctx.lineTo(X[i] + dx, Y[i] + dy); // min-image endpoint (draws the short way across the torus)
       ctx.stroke();
     }
   }
@@ -306,7 +305,7 @@ function drawHover(ctx, state, P, view, h) {
   const N = state.count, GEN = state.genome, R = P.R;
   const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
   const halfWx = Wx / 2, halfWy = Wy / 2;
-  const X = state.x, Y = state.y, { scale, ox, oy } = view;
+  const X = state.x, Y = state.y;
   const ri = R * GEN[h * G + GENE.rScale];
   // this cell's links at full alpha (brute force over N — one cell, cheap enough)
   ctx.setLineDash([]);
@@ -321,14 +320,14 @@ function drawHover(ctx, state, P, view, h) {
     const rj = R * GEN[j * G + GENE.rScale];
     if (d >= (ri > rj ? ri : rj)) continue;
     ctx.beginPath();
-    ctx.moveTo(ox + X[h] * scale, oy + Y[h] * scale);
-    ctx.lineTo(ox + (X[h] + dx) * scale, oy + (Y[h] + dy) * scale);
+    ctx.moveTo(X[h], Y[h]);
+    ctx.lineTo(X[h] + dx, Y[h] + dy);
     ctx.stroke();
   }
   // amber ring on the hovered cell (the one non-data accent)
   ctx.strokeStyle = '#C9873A';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.arc(ox + X[h] * scale, oy + Y[h] * scale, 5.5, 0, 6.283185307179586);
+  ctx.arc(X[h], Y[h], 5.5, 0, 6.283185307179586);
   ctx.stroke();
 }
