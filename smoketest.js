@@ -1,5 +1,10 @@
-// Headless core check. Run: gjs -m smoketest.js
+// Headless core check. Run: node smoketest.js  (or: gjs -m smoketest.js)
+// Exits non-zero if any expectation fails, so CI can gate on it.
 import { createState, resetState, addAgent, step, computeStats, geneRanges, DEFAULTS, G, GENE } from './sim.js';
+
+const print = globalThis.print || console.log;
+const failures = [];
+function expect(ok, what) { if (!ok) { failures.push(what); print(`  FAIL: ${what}`); } }
 
 function mk(spec, R) {
   const g = new Float32Array(G);
@@ -34,14 +39,17 @@ function traj(label, P, spec, nInit, ticks, spread = 0.05, seed = 7) {
   }
   const s = computeStats(st, P);
   print(`${label.padEnd(20)} ${marks.join('  ').padEnd(44)} | final varIdx=${s.varianceIndex.toFixed(4)} lineages=${s.lineages}${over ? '  !!CAP EXCEEDED' : ''}`);
+  expect(!over, `${label}: population stayed within the cap`);
   return s;
 }
 
 print('=== a viable population sustains (swarm: taxis aggregates into breeding-density clusters) ===');
-traj('swarm', Object.assign({}, DEFAULTS), SWARM, 6000, 500);
+const sw = traj('swarm', Object.assign({}, DEFAULTS), SWARM, 6000, 500);
+expect(sw.population > 0, 'swarm: a viable population sustains');
 
 print('\n=== gray goo: costs off + wide bands => saturates toward the cap, variance washes out ===');
-traj('gray goo', Object.assign({}, DEFAULTS, { costsOn: false }), WIDE, 4000, 400);
+const goo = traj('gray goo', Object.assign({}, DEFAULTS, { costsOn: false }), WIDE, 4000, 400);
+expect(goo.population > 4000, 'gray goo: costs-off population grows');
 
 print('\n=== conway-ish is near-critical by design (B3/S23 analogue — expected to thin out) ===');
 traj('conway-ish', Object.assign({}, DEFAULTS), CONWAY, 8000, 200);
@@ -50,10 +58,14 @@ print('\n=== blend is meant to fail: variance index should sit well below crosso
 const cx = traj('crossover', Object.assign({}, DEFAULTS, { recomb: 'crossover' }), SWARM, 6000, 400);
 const bl = traj('blend',     Object.assign({}, DEFAULTS, { recomb: 'blend'     }), SWARM, 6000, 400);
 print(`blend/crossover varIdx ratio = ${(bl.varianceIndex / cx.varianceIndex).toFixed(3)} (want < 1)`);
+expect(bl.varianceIndex < cx.varianceIndex, 'blend inheritance holds less variance than crossover');
 
 print('\n=== reproducibility: same seed+params => byte-identical run ===');
 const P = Object.assign({}, DEFAULTS);
 const a = traj('run A', P, SWARM, 6000, 150);
 const b = traj('run B', P, SWARM, 6000, 150);
 print(`identical: pop=${a.population === b.population} varIdx=${a.varianceIndex === b.varianceIndex} lineages=${a.lineages === b.lineages}`);
+expect(a.population === b.population && a.varianceIndex === b.varianceIndex && a.lineages === b.lineages, 'same seed + params reproduces the run');
+
+if (failures.length) throw new Error(`${failures.length} check(s) failed:\n  ` + failures.join('\n  '));
 print('\nOK');

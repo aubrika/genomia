@@ -14,8 +14,9 @@ const state = createState(MAXCAP);   // arrays sized to the buffer ceiling; P.ca
 // the flora distribution is different each time (seeded off the clock, then advanced).
 let fieldNonce = Date.now() >>> 0;
 const freshFieldSeed = () => { fieldNonce = (fieldNonce + 0x9e3779b1) >>> 0; return fieldNonce; };
+let pinnedFieldSeed = null;   // set by a shared link: the next reset reuses that flora pattern instead
 const view = { scale: 1, ox: 0, oy: 0 };
-const ui = { playing: false, colorMode: 'phenotype', showLines: true, lineCap: 20000, hovered: -1 };
+const ui = { playing: false, colorMode: 'lineage', showLines: true, lineCap: 20000, hovered: -1 };
 const init = { population: 6000, layout: 'uniform', k: 6, genomeInit: 'tworand', spread: 0.03, blobN: 60, blobJitter: 26, seed: 12345 };
 let selGene = GENE.step;
 let curPreset = -1;   // index of the last-applied preset (-1 = the default two-lineage scene)
@@ -121,7 +122,9 @@ const HELP = {
   geneCost: 'Extra upkeep charged per unit of genome complexity (far perception, fast motility, wide tolerance, strong steering). This is the "greater features cost more food" term — elaborate cells must out-feed simple ones to survive.',
   birthCost: 'Energy a parent invests into each offspring (the child starts life with it). A cell must bank ~1.4× this to breed, so reproduction is a real energy decision, not free.',
   lines: 'Draw a link between cells that perceive each other. Solid = mutual perception, dashed = one-way (a real consequence of different rScale). Line opacity follows perception strength, so links fade in and out as cells drift.',
-  seed: 'Random seed. The same seed plus the same parameters reproduces a run exactly (the resource field is re-randomized on every reset, so trophic runs vary each time).',
+  seed: 'Random seed. The same seed plus the same parameters reproduces a run exactly — in the same window size, since the habitat scales with the window. (The resource field is re-randomized on every reset, so trophic runs vary each time; a shared link pins it.)',
+  share: 'Copy a link that re-creates this run from tick 0 with the current settings: seed, rules, brush, initializer, colour mode and flora pattern. Best reproduced in a similar window size.',
+  snapshot: 'Download the habitat as a PNG image (at your screen’s full resolution).',
   play: 'Run or pause the simulation. (Space)',
   stepBtn: 'Advance exactly one tick. (.)',
   reset: 'Clear and re-seed the population using the Initialize settings below. (R)',
@@ -183,6 +186,7 @@ function buildSide() {
       inp.addEventListener('change', () => { init.seed = parseInt(inp.value, 10) || 0; });
       return inp;
     })()]), HELP.seed),
+    el('div', { class: 'grid2' }, [button('⧉ copy link', copyLink, '', HELP.share), button('⤓ snapshot', snapshot, '', HELP.snapshot)]),
   ]));
 
   // Presets — a menu, with the selected scenario's description shown persistently.
@@ -194,13 +198,13 @@ function buildSide() {
 
   // Rules
   const ageBtn = button('max-age death', () => { P.maxAgeOn = !P.maxAgeOn; ageBtn.classList.toggle('on', P.maxAgeOn); }, P.maxAgeOn ? 'on' : '', HELP.maxAgeToggle);
-  const capBtn = button('unlimited', () => { P.capOff = !P.capOff; capBtn.classList.toggle('on', P.capOff); }, P.capOff ? 'on' : '', HELP.capOff);
+  const capBtn = button('unlimited', () => { P.capOff = !P.capOff; capBtn.classList.toggle('on', P.capOff); syncPopMax(); }, P.capOff ? 'on' : '', HELP.capOff);
   const kfmt = (v) => (v >= 1000 ? (v / 1000) + 'k' : String(v));
   side.append(section('Rules', [
     slider('softness σ', 0, 2, 0.05, () => P.sigma, (v) => P.sigma = v, f2, HELP.sigma),
     el('div', { class: 'row' }, [ageBtn]),
     slider('max age', 50, 2000, 10, () => P.maxAge, (v) => P.maxAge = v, (v) => v.toFixed(0), HELP.maxAge),
-    slider('max pop', 1000, MAXCAP, 1000, () => P.cap, (v) => P.cap = v, kfmt, HELP.maxPop),
+    slider('max pop', 1000, MAXCAP, 1000, () => P.cap, (v) => { P.cap = v; syncPopMax(); }, kfmt, HELP.maxPop),
     el('div', { class: 'row' }, [capBtn]),
   ], 'live'));
 
@@ -269,8 +273,10 @@ function buildSide() {
   ], 'neu'));
 
   // Initialize
+  const popRow = slider('population', 100, P.capOff ? MAXCAP : P.cap, 100, () => init.population, (v) => init.population = v, (v) => v.toFixed(0), HELP.population);
+  popInput = popRow.querySelector('input'); popOut = popRow.querySelector('output');
   side.append(section('Initialize', [
-    slider('population', 100, P.capOff ? MAXCAP : P.cap, 100, () => init.population, (v) => init.population = v, (v) => v.toFixed(0), HELP.population),
+    popRow,
     ctrlSelect('layout', [['uniform', 'uniform'], ['blob', 'central blob'], ['kblobs', 'k blobs'], ['ring', 'ring'], ['lattice', 'jittered lattice']], init.layout, (v) => init.layout = v, HELP.layout),
     ctrlSelect('genome', [['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B'], ['tworand', 'two random']], init.genomeInit, (v) => init.genomeInit = v, HELP.genomeInit),
     slider('spread', 0, 0.15, 0.005, () => init.spread, (v) => init.spread = v, (v) => v.toFixed(3), HELP.spread),
@@ -281,6 +287,22 @@ function buildSide() {
     slider('N', 2, 400, 1, () => init.blobN, (v) => init.blobN = v, (v) => v.toFixed(0), HELP.blobN),
     slider('jitter', 2, 120, 1, () => init.blobJitter, (v) => init.blobJitter = v, (v) => v.toFixed(0), HELP.blobJitter),
   ], 'neu'));
+
+  side.append(el('p', { class: 'hint about' }, [
+    'Genomia — a little world of evolving genomes. ',
+    el('a', { href: 'https://github.com/aubrika/genomia', target: '_blank', rel: 'noopener' }, ['Source & notes on GitHub']), '.',
+  ]));
+}
+
+// The seeding-population slider can't exceed the population limit; keep its max (and
+// value) in step when the limit changes, without rebuilding the panel mid-drag.
+let popInput = null, popOut = null;
+function syncPopMax() {
+  if (!popInput) return;
+  const mx = P.capOff ? MAXCAP : P.cap;
+  popInput.max = mx;
+  if (init.population > mx) init.population = mx;
+  popInput.value = init.population; popOut.textContent = init.population.toFixed(0);
 }
 
 // ---- bottom sparklines ----------------------------------------------------
@@ -319,10 +341,18 @@ function pushHist(s) {
   hist.share.push(row);
   for (const k in hist) if (hist[k].length > HMAX) hist[k].shift();
 }
+// Size a sparkline's backing store to its CSS box at devicePixelRatio (crisp on retina)
+// and return a context that draws in CSS pixels.
+function sparkCtx(cvs) {
+  const dpr = devicePixelRatioCapped(), w = cvs.clientWidth, h = cvs.clientHeight;
+  const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+  if (cvs.width !== bw) cvs.width = bw; if (cvs.height !== bh) cvs.height = bh;
+  const ctx = cvs.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
 function drawSeries(cvs, data, color, lo, hi, band) {
-  const dpr = 1; const w = cvs.clientWidth, h = cvs.clientHeight;
-  if (cvs.width !== w) cvs.width = w; if (cvs.height !== h) cvs.height = h;
-  const ctx = cvs.getContext('2d'); ctx.clearRect(0, 0, w, h);
+  const { ctx, w, h } = sparkCtx(cvs);
   if (data.length < 2) return;
   const n = data.length, span = (hi - lo) || 1;
   const X = (i) => (i / (HMAX - 1)) * w;
@@ -341,9 +371,7 @@ function drawSeries(cvs, data, color, lo, hi, band) {
 // Stacked-area of founder-lineage share over time. Each band is a lineage's fraction
 // of the living population; the top "other" band (grey) is anything founded later.
 function drawStack(cvs, frames, cols) {
-  const w = cvs.clientWidth, h = cvs.clientHeight;
-  if (cvs.width !== w) cvs.width = w; if (cvs.height !== h) cvs.height = h;
-  const ctx = cvs.getContext('2d'); ctx.clearRect(0, 0, w, h);
+  const { ctx, w, h } = sparkCtx(cvs);
   const n = frames.length; if (n < 2) return;
   const bands = frames[n - 1].length;
   const X = (i) => (i / (HMAX - 1)) * w;
@@ -382,7 +410,8 @@ function drawSparks(s) {
 function applyInit() {
   resetState(state, init.seed | 0);
   state.energy0 = P.energyMax * 0.5;
-  P.fieldSeed = freshFieldSeed();   // a new flora pattern each reset
+  P.fieldSeed = pinnedFieldSeed != null ? pinnedFieldSeed : freshFieldSeed();   // a new flora pattern each reset
+  pinnedFieldSeed = null;
   const rr = geneR(), Wx = P.worldW, Wy = P.worldH, Dm = Math.min(Wx, Wy), n = init.population, rng = state.rng;
   const wx_ = (v) => ((v % Wx) + Wx) % Wx, wy_ = (v) => ((v % Wy) + Wy) % Wy;
   const place = (x, y, g, lin, sp) => addAgent(state, wx_(x), wy_(y), g, lin, rr, sp);
@@ -551,9 +580,14 @@ function copyHovered() {
 
 // ---- canvas / view --------------------------------------------------------
 const canvas = $('#canvas');
+// The URL hash carries an optional shared config (#cfg=…) plus dev/testing flags; split
+// them so a base64 config can never be mistaken for a flag.
+const hashParts = location.hash.slice(1).split('&').filter(Boolean);
+const cfgPart = hashParts.find((h) => h.startsWith('cfg='));
+const devHash = hashParts.filter((h) => !h.startsWith('cfg=')).join('&');
 // Prefer WebGL2 (one draw call for all cells — scales to the "unlimited" cap); fall
 // back to the Canvas2D renderer if it's unavailable or forced off with #no-gl.
-const glRenderer = location.hash.includes('no-gl') ? null : createGLRenderer(canvas);
+const glRenderer = devHash.includes('no-gl') ? null : createGLRenderer(canvas);
 let renderFn, rendererName;
 if (glRenderer) { renderFn = (s, pp, v, u) => glRenderer.draw(s, pp, v, u); rendererName = 'webgl2'; }
 else { const ctx = canvas.getContext('2d', { alpha: false }); renderFn = (s, pp, v, u) => draw(ctx, s, pp, v, u); rendererName = 'canvas2d'; }
@@ -564,14 +598,20 @@ else { const ctx = canvas.getContext('2d', { alpha: false }); renderFn = (s, pp,
 // every preset stays calibrated at any window size. A resize just "zooms" the
 // running ecosystem: positions, R, and the R-relative genes (dDisp, step) all
 // scale together, so the dynamics are preserved.
+// The world is measured in CSS pixels; the canvas backing store is devicePixelRatio
+// times larger (capped at 2 for fill-rate), and view.scale maps one onto the other —
+// so the simulation is identical on a retina screen, just drawn sharper.
 const R_FROM_AREA = (area) => Math.max(8, Math.min(40, 0.017 * Math.sqrt(area)));
+function devicePixelRatioCapped() { return Math.min(2, window.devicePixelRatio || 1); }
 function resize() {
-  const rect = $('#stage').getBoundingClientRect();
+  const rect = $('#stage').getBoundingClientRect(), dpr = devicePixelRatioCapped();
+  const W = Math.max(1, Math.floor(rect.width)), H = Math.max(1, Math.floor(rect.height));
+  if (W === P.worldW && H === P.worldH && canvas.width === Math.round(W * dpr)) return; // nothing changed
   const oldW = P.worldW, oldH = P.worldH, oldR = P.R;
-  canvas.width = Math.max(1, Math.floor(rect.width));
-  canvas.height = Math.max(1, Math.floor(rect.height));
-  P.worldW = canvas.width; P.worldH = canvas.height;
-  view.scale = 1; view.ox = 0; view.oy = 0;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  P.worldW = W; P.worldH = H;
+  view.scale = canvas.width / W; view.ox = 0; view.oy = 0;
   const newR = R_FROM_AREA(P.worldW * P.worldH), s = newR / oldR;
   if (oldW) {
     const sx = P.worldW / oldW, sy = P.worldH / oldH;
@@ -583,7 +623,7 @@ function resize() {
   brush[GENE.dDisp] *= s; brush[GENE.step] *= s;   // keep the brush R-relative too
   P.R = newR; P._rangesR = -1;                      // force sim to recompute gene ranges
   if (P.energyOn) { if (P.fieldSeed == null) P.fieldSeed = freshFieldSeed(); buildField(state, P); } // rebuild at new dims, same pattern
-  if (oldW) buildSide();
+  if (oldW && s !== 1) buildSide();   // brush sliders read R-relative genes
 }
 window.addEventListener('resize', resize);
 
@@ -657,12 +697,71 @@ function updateTooltip(e) {
   const base = ui.hovered * G;
   const rows = GENE_NAMES.map((n, g) => `<span class="k">${n}</span> ${g === GENE.fecundity ? state.genome[base + g].toFixed(3) : f2(state.genome[base + g])}`);
   const en = P.energyOn ? ` · <span class="k">e</span> ${state.energy[ui.hovered].toFixed(1)}` : '';
-  tip.innerHTML = `<b>#${ui.hovered}</b> · lin ${state.lineage[ui.hovered]} · age ${state.age[ui.hovered] | 0}${en}<br>` + rows.join('<br>');
+  const sp = state.species[ui.hovered];
+  tip.innerHTML = `<b>#${ui.hovered}</b> · lin ${state.lineage[ui.hovered]} · genus ${state.spGenus[sp]} · sp ${sp} · age ${state.age[ui.hovered] | 0}${en}<br>` + rows.join('<br>');
   tip.style.display = 'block';
   const r = canvas.getBoundingClientRect();
   let x = e.clientX - r.left + 14, y = e.clientY - r.top + 14;
-  if (x > canvas.width - 220) x -= 234; if (y > canvas.height - 190) y -= 200;
+  if (x + tip.offsetWidth > r.width - 8) x -= tip.offsetWidth + 28;
+  if (y + tip.offsetHeight > r.height - 8) y -= tip.offsetHeight + 28;
+  x = Math.max(4, x); y = Math.max(4, y);
   tip.style.left = x + 'px'; tip.style.top = y + 'px';
+}
+
+// ---- share / snapshot -----------------------------------------------------
+// A shared link (#cfg=<base64url JSON>) re-seeds the same run: seed, flora seed, every
+// rule that differs from the defaults, the initializer, the brush (dispersal and
+// motility stored relative to R, so it survives a different window size), and the view.
+const NOT_SHARED = new Set(['world', 'worldW', 'worldH', 'R', 'fieldSeed', '_rangesR']);
+const R_RELATIVE = (g) => g === GENE.dDisp || g === GENE.step;
+const short = (v) => (typeof v === 'number' ? +v.toPrecision(5) : v);
+function encodeConfig() {
+  const p = {};
+  for (const k in DEFAULTS) if (!NOT_SHARED.has(k) && P[k] !== DEFAULTS[k]) p[k] = short(P[k]);
+  const cfg = {
+    v: 1, seed: init.seed, fs: P.fieldSeed >>> 0, p,
+    init: Object.fromEntries(Object.entries(init).map(([k, v]) => [k, short(v)])),
+    b: Array.from(brush, (v, g) => short(R_RELATIVE(g) ? v / P.R : v)),
+    c: ui.colorMode, l: ui.showLines ? 1 : 0, pr: curPreset,
+  };
+  return btoa(JSON.stringify(cfg)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+// Apply a decoded config, accepting only known keys of the right type (links are untrusted input).
+function applyConfig(str) {
+  let cfg;
+  try { cfg = JSON.parse(atob(str.replace(/-/g, '+').replace(/_/g, '/'))); } catch { return false; }
+  if (!cfg || typeof cfg !== 'object') return false;
+  const sameType = (a, b) => typeof a === typeof b && (typeof a !== 'number' || Number.isFinite(a));
+  if (cfg.p && typeof cfg.p === 'object') for (const k in cfg.p) if (Object.hasOwn(DEFAULTS, k) && !NOT_SHARED.has(k) && sameType(cfg.p[k], DEFAULTS[k])) P[k] = cfg.p[k];
+  if (cfg.init && typeof cfg.init === 'object') for (const k in cfg.init) if (Object.hasOwn(init, k) && sameType(cfg.init[k], init[k])) init[k] = cfg.init[k];
+  if (Number.isFinite(cfg.seed)) init.seed = cfg.seed | 0;
+  if (Number.isFinite(cfg.fs)) pinnedFieldSeed = cfg.fs >>> 0;
+  if (Array.isArray(cfg.b) && cfg.b.length === G && cfg.b.every(Number.isFinite)) {
+    for (let g = 0; g < G; g++) brush[g] = R_RELATIVE(g) ? cfg.b[g] * P.R : cfg.b[g];
+    markBrushDirty();
+  }
+  if (['phenotype', 'lineage', 'trophic'].includes(cfg.c)) ui.colorMode = cfg.c;
+  if (cfg.l === 0 || cfg.l === 1) ui.showLines = !!cfg.l;
+  if (Number.isInteger(cfg.pr) && cfg.pr >= -1 && cfg.pr < PRESETS.length) curPreset = cfg.pr;
+  return true;
+}
+function copyLink(e) {
+  const btn = e.currentTarget;
+  const url = location.origin + location.pathname + '#cfg=' + encodeConfig();
+  const done = () => { const t = btn.textContent; btn.textContent = '✓ copied'; setTimeout(() => { btn.textContent = t; }, 1400); };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(url).then(done, () => window.prompt('Copy this link:', url));
+  else window.prompt('Copy this link:', url);
+}
+function snapshot() {
+  // redraw without the hover overlay, then read the canvas in the same task (WebGL's
+  // buffer is only guaranteed until the frame is composited)
+  renderFn(state, P, view, Object.assign({}, ui, { hovered: -1 }));
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const a = el('a', { href: URL.createObjectURL(blob), download: `genomia-seed${init.seed}-t${state.tick}.png` });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }, 'image/png');
 }
 
 // ---- loop -----------------------------------------------------------------
@@ -681,16 +780,22 @@ function frame(t) {
   drawSparks(s);
   fpsN++; if (t - fpsT > 500) { fps = Math.round(fpsN * 1000 / (t - fpsT)); fpsN = 0; fpsT = t; }
   const troph = P.energyOn ? ` · plants <b>${s.plants}</b> · animals <b>${s.animals}</b> · e̅ <b>${s.meanEnergy.toFixed(1)}</b>` : '';
+  $('#starthint').style.display = !ui.playing && state.tick === 0 ? 'block' : 'none';
   $('#hud').innerHTML = `tick <b>${state.tick}</b> · pop <b>${state.count}</b> · lineages <b>${s.lineages}</b> · genera <b>${s.genera}</b>${troph} · ${fps} fps · ${rendererName}${ui.playing ? '' : ' · <b>paused</b>'}`;
   requestAnimationFrame(frame);
 }
 
 window.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const t = e.target;
+  // text fields and menus keep their keys; sliders don't need Space/R, so shortcuts still work after a drag
+  if ((t.tagName === 'INPUT' && t.type !== 'range') || t.tagName === 'SELECT' || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
   else if (e.key === '.') { e.preventDefault(); singleStep(); }
   else if (e.key === 'r' || e.key === 'R') applyInit();
 });
+// Some browsers activate a focused button on Space keyup even when keydown was
+// cancelled, which would toggle play twice; swallow it.
+window.addEventListener('keyup', (e) => { if (e.code === 'Space' && e.target.tagName === 'BUTTON') e.preventDefault(); });
 
 // ---- help tooltips --------------------------------------------------------
 // One floating element follows the cursor and shows the data-tip of whatever
@@ -705,8 +810,9 @@ function setupTips() {
     if (y + h > window.innerHeight - 8) y = e.clientY - h - 14;
     tip.style.left = Math.max(8, x) + 'px'; tip.style.top = Math.max(8, y) + 'px';
   };
-  document.addEventListener('mousemove', (e) => {
-    const t = e.target.closest ? e.target.closest('[data-tip]') : null;
+  // mouse only: on touch, a tap would leave a tip stuck on screen
+  document.addEventListener('pointermove', (e) => {
+    const t = e.pointerType === 'mouse' && e.target.closest ? e.target.closest('[data-tip]') : null;
     if (t) {
       const txt = t.getAttribute('data-tip');
       if (txt !== cur) { cur = txt; tip.textContent = txt; tip.style.display = 'block'; }
@@ -718,20 +824,23 @@ function setupTips() {
 // ---- boot -----------------------------------------------------------------
 setupTips();
 resize();
+const coarse = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+$('#starthint').innerHTML = coarse ? 'tap <b>▶ play</b> below to start' : 'press <kbd>Space</kbd> to start';
+const fromLink = cfgPart ? applyConfig(cfgPart.slice(4)) : false;   // shared link: settings first, then seed
 buildSide();
 buildBottom();
-const presetM = location.hash.match(/preset=?(\d)/);  // #preset=1 — boot into a preset (dev/testing)
-if (presetM) applyPreset(+presetM[1] - 1); else applyInit();
-if (location.hash.includes('genealogy')) ui.colorMode = 'lineage';  // #genealogy — dev/testing
-if (location.hash.includes('trophic')) ui.colorMode = 'trophic';    // #trophic — dev/testing
-if (location.hash.includes('nolines')) ui.showLines = false;        // #nolines — cheap headless screenshots
-// prefers-reduced-motion => stay paused (default); otherwise also default paused per spec
-const runM = location.hash.match(/run=?(\d+)/);        // #run400 — pre-step headlessly (dev/testing)
+const presetM = devHash.match(/preset=?(\d)/);  // #preset=1 — boot into a preset (dev/testing)
+if (presetM && !fromLink) applyPreset(+presetM[1] - 1); else applyInit();
+if (devHash.includes('genealogy')) ui.colorMode = 'lineage';  // #genealogy — dev/testing
+if (devHash.includes('phenotype')) ui.colorMode = 'phenotype';  // #phenotype — dev/testing
+if (devHash.includes('trophic')) ui.colorMode = 'trophic';    // #trophic — dev/testing
+if (devHash.includes('nolines')) ui.showLines = false;        // #nolines — cheap headless screenshots
+const runM = devHash.match(/run=?(\d+)/);        // #run400 — pre-step headlessly (dev/testing)
 if (runM) { const k = +runM[1]; for (let i = 0; i < k; i++) step(state, P); pushHist(computeStats(state, P)); }
-// with a hash, playing state is explicit ('play' => run, else a paused snapshot);
+// with a dev hash, playing state is explicit ('play' => run, else a paused snapshot);
 // this also overrides a preset's autoplay so screenshots don't keep stepping.
-if (location.hash.length > 1) {
-  ui.playing = location.hash.includes('play');
+if (devHash.length > 0) {
+  ui.playing = devHash.includes('play');
   const pb = $('#playbtn'); if (pb) pb.textContent = ui.playing ? '❚❚ pause' : '▶ play';
 }
 requestAnimationFrame(frame);

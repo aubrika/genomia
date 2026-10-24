@@ -2,6 +2,8 @@
 
 *A little world of evolving genomes.*
 
+**[▶ Open Genomia](https://aubrika.github.io/genomia/)** — runs in any modern browser, no install.
+
 A browser artificial-life sandbox: a continuous-space, Conway-derived system where
 every cell carries an evolvable genome and everything on screen is a readout of
 genotype. Cells are points on a torus — born near a parent, dying of loneliness or
@@ -19,7 +21,8 @@ python3 -m http.server 8000
 ```
 
 Starts paused. **Space** play · **.** step · **R** reset. Choose a scenario from the
-**preset** menu; hover any control to see what it does.
+**preset** menu; hover any control to see what it does. **Copy link** shares a run
+(seed, rules, brush and flora pattern) and **snapshot** saves the habitat as a PNG.
 
 ## A few things to try
 
@@ -36,7 +39,8 @@ Starts paused. **Space** play · **.** step · **R** reset. Choose a scenario fr
 Each panel section is badged for when it applies: **live** (global rules — affect
 every cell now), **new cells** (the brush you paint with), **on reset** (re-seeding).
 Click to place · drag to paint · shift-click a blob · alt-drag to erase · hover a
-cell to read its genome.
+cell to read its genome. On touch screens the controls stack below the habitat and
+tap/drag paints; blobs, erasing and genome readouts need a mouse and keyboard.
 
 ## Structure
 
@@ -47,8 +51,12 @@ cell to read its genome.
   the fallback.
 - `render_gl.js` — WebGL2 renderer: all cells / flora / lines as GPU point-sprites and
   lines, one draw call each. Used automatically when available; force it off with `#no-gl`.
-- `main.js` — UI, interaction, loop.
+- `main.js` — UI, interaction, loop, shareable links (`#cfg=…`).
 
-`gjs -m smoketest.js` runs a headless regression over the core (reproducibility,
-the gray-goo attractor, blend-collapse, and that the population neither dies
-instantly nor exceeds the cap).
+`node smoketest.js` (or `gjs -m smoketest.js`) runs a headless regression over the
+core (reproducibility, the gray-goo attractor, blend-collapse, and that the
+population neither dies instantly nor exceeds the cap); CI runs it on every push.
+
+## License
+
+[MIT](LICENSE)
