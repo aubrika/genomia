@@ -55,6 +55,8 @@ section > h2 { font-family: var(--sans); font-weight: 600; font-size: 18px; lett
 .ctrl { display: grid; grid-template-columns: 128px 1fr 72px; align-items: center; gap: 12px; margin: 7px 0; }
 .ctrl label { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctrl output { text-align: right; color: var(--ink); }
+.ctrl.stack { grid-template-columns: 1fr 72px; row-gap: 2px; }
+.ctrl.stack label { grid-column: 1 / -1; overflow: visible; white-space: normal; }
 
 input[type=range] { -webkit-appearance: none; appearance: none; height: 5px; background: var(--divider); border-radius: 3px; outline: none; }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--ink); cursor: pointer; border: none; }
@@ -91,12 +93,12 @@ input[type=number], input[type=text] { cursor: text; width: 100%; }
 
 #uitip {
   position: fixed; z-index: 20; pointer-events: none; display: none;
-  max-width: 340px; padding: 11px 14px; font-size: 16px; line-height: 1.45;
+  max-width: 420px; padding: 11px 14px; font-size: 16px; line-height: 1.45; white-space: pre-line;
   color: var(--ink); background: rgba(20, 18, 15, 0.97); border: 1px solid var(--divider);
   border-radius: 6px; box-shadow: 0 6px 22px rgba(0,0,0,0.5);
 }
 
-#hud { position: absolute; top: 16px; left: 18px; z-index: 4; color: var(--muted); font-size: 18px; letter-spacing: 0.06em; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.6); }
+#hud { position: absolute; top: 16px; left: 18px; right: 120px; z-index: 4; color: var(--muted); font-size: 18px; letter-spacing: 0.06em; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.6); }
 #hud b { color: var(--ink); }
 kbd { color: var(--ink); background: var(--panel); border: 1px solid var(--divider); border-radius: 4px; padding: 0 6px; }
 
@@ -111,6 +113,20 @@ kbd { color: var(--ink); background: var(--panel); border: 1px solid var(--divid
 .about a { color: var(--muted); text-decoration: underline; text-decoration-color: var(--divider); text-underline-offset: 3px; }
 .about a:hover { color: var(--accent); }
 .grid2 { margin-top: 10px; }
+
+/* Corner controls on the habitat: hide/show the UI, plus play/pause while it's hidden. */
+#corner { position: absolute; top: 12px; right: 12px; z-index: 6; display: flex; gap: 8px; }
+#corner button {
+  width: 42px; height: 42px; padding: 0; font-size: 20px; line-height: 1; border-radius: 8px;
+  background: rgba(18,16,14,0.85); color: var(--muted); opacity: 0.7; transition: opacity 0.15s;
+}
+#corner button:hover, #corner button:focus-visible { opacity: 1; color: var(--ink); }
+#cornerplay { display: none; }
+
+body.collapsed #side, body.collapsed #bottom, body.collapsed #hud { display: none; }
+body.collapsed #stage { position: fixed; inset: 0; width: auto; height: auto; }
+body.collapsed #cornerplay { display: block; }
+body.collapsed { overflow: hidden; }
 
 /* Mid-width windows: a slimmer panel so the habitat keeps most of the screen. */
 @media (max-width: 1280px) {
@@ -138,5 +154,7 @@ kbd { color: var(--ink); background: var(--panel); border: 1px solid var(--divid
   .hint { font-size: 14px; }
   #hud { font-size: 13px; top: 10px; left: 12px; right: 12px; }
   #starthint { font-size: 15px; }
+  #corner { top: 8px; right: 8px; }
+  #hud { right: 110px; }
   #tooltip { font-size: 14px; padding: 9px 12px; }
 }
