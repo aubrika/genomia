@@ -37,6 +37,7 @@ export function geneRanges(R) {
 export const DEFAULTS = {
   world: 1000, R: 17, sigma: 0.6,
   costsOn: true, kMove: 0.4, kSense: 0.3, kTol: 0.5, kTaxis: 0.2,
+  kTolDeath: 0.03,        // generalist mortality: per-tick death chance added at a full-width survival window (costs on, energy off)
   recomb: 'crossover', mutation: 'gaussian', mu: 0.1, sigmaG: 0.05, kappa: 0.15,
   macroRate: 0.05,        // fraction of mutations that are outsized "knockouts" (re-roll the whole gene) rather than small nudges
 
@@ -112,6 +113,13 @@ export function foundSpecies(state, genome, off, lineageId, parent, genus, big) 
 export function foundClade(state, genome, off, lineageId) {
   const g = foundGenus(state, genome, off, lineageId, -1);
   return foundSpecies(state, genome, off, lineageId, -1, g, true);
+}
+
+// Reference tracking rates: how far a species' / genus' reference genome moves toward
+// each offspring that stays in it. Large clades effectively track their mean genome.
+const SPECIES_TRACK = 0.01, GENUS_TRACK = 0.002;
+function track(ref, genome, off, rate) {
+  for (let g = 0; g < G; g++) ref[g] += rate * (genome[off + g] - ref[g]);
 }
 
 function smoothstep(a, b, x) {
@@ -410,7 +418,11 @@ export function step(state, P) {
         }
       }
     }
-    n[i] = acc;
+    // Crowding is a density: the kernel sum normalised by the sensed area (rScale²), so
+    // it reads "neighbours per base-reach area" whatever the reach. Shrinking reach
+    // therefore can't be used to feel less crowded.
+    const rsi = GEN[base + GENE.rScale];
+    n[i] = acc / (rsi * rsi);
     if (eOn) dE[i] += dEi;
     const gl = Math.hypot(agx, agy);
     if (gl > 1e-12) { gx[i] = agx / gl; gy[i] = agy / gl; } else { gx[i] = 0; gy[i] = 0; }
@@ -440,11 +452,17 @@ export function step(state, P) {
   }
 
   // 3. Death — probabilistic with soft band edges (plus starvation when energy is on).
+  //    With metabolic cost on (and energy off), a wide survival window also carries a
+  //    standing mortality: generalists survive more conditions but die more often in
+  //    all of them. Without it, widening the window is nearly free and every run
+  //    converges on immortal grey generalists.
   const sigma = P.sigma, maxAgeOn = P.maxAgeOn, maxAge = P.maxAge;
+  const tolDeath = P.costsOn && !eOn ? P.kTolDeath : 0;
   for (let i = 0; i < N; i++) {
     const base = i * G, ni = n[i];
-    const pSurv = smoothstep(GEN[base + GENE.sLo] - sigma, GEN[base + GENE.sLo] + sigma, ni)
+    let pSurv = smoothstep(GEN[base + GENE.sLo] - sigma, GEN[base + GENE.sLo] + sigma, ni)
       * (1 - smoothstep(GEN[base + GENE.sHi] - sigma, GEN[base + GENE.sHi] + sigma, ni));
+    if (tolDeath > 0) pSurv *= 1 - tolDeath * (GEN[base + GENE.sHi] - GEN[base + GENE.sLo]) / 6;
     let alive = rng.next() < pSurv;
     if (eOn && EN[i] <= 0) alive = false;                 // starvation
     if (alive && maxAgeOn && AGE[i] >= maxAge) alive = false;
@@ -486,6 +504,9 @@ export function step(state, P) {
     // Divergence taxonomy, coarse first: past the genus threshold => new genus (and a
     // new species inside it, marked as a big colour step); else past the species
     // threshold => new species in the same genus; else inherit both.
+    // Each tier's reference genome follows its members (nudged toward every offspring
+    // that stays in it), so a clade drifting together stays one clade; only offspring
+    // that diverge from the group found new ones.
     const psp = SPE[i], off = bc * G;
     let osp = psp;
     if (spThr > 0) {
@@ -493,8 +514,10 @@ export function step(state, P) {
       if (gThr > 0 && geneDist(bg, off, state.gRef[pg], 0, rr) > gThr) {
         const ng = foundGenus(state, bg, off, LIN[i], pg);
         osp = foundSpecies(state, bg, off, LIN[i], psp, ng, true);
-      } else if (geneDist(bg, off, state.spRef[psp], 0, rr) > spThr) {
-        osp = foundSpecies(state, bg, off, LIN[i], psp, pg, false);
+      } else {
+        if (geneDist(bg, off, state.spRef[psp], 0, rr) > spThr) osp = foundSpecies(state, bg, off, LIN[i], psp, pg, false);
+        else track(state.spRef[psp], bg, off, SPECIES_TRACK);
+        track(state.gRef[pg], bg, off, GENUS_TRACK);
       }
     }
     bspecies[bc] = osp;

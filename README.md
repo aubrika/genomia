@@ -26,13 +26,27 @@ Starts paused. **Space** play · **.** step · **R** reset · **H** hide the UI 
 
 ## A few things to try
 
-- **Gray goo** — turn metabolic cost off and watch every gene run to its extreme and
-  the variance index collapse into a grey monoculture.
-- **Genealogy color** — color by ancestry instead of phenotype to see the family
-  tree: each lineage a hue family, each species a shade within it.
-- **Trophic web** — switch on the energy model and one lineage grazing the flora
+- **Gray goo**: turn metabolic cost off. Tolerance becomes free, so every lineage
+  evolves the widest possible survival and breeding windows, the habitat fills to the
+  cap, and (in phenotype colour) everything turns grey.
+- **Genealogy colour** (the default): each founder lineage is a hue family, and each
+  species split steps the shade, so the family tree is visible on the habitat.
+- **Species bloom**: one founder under fast mutation and choosy mating splits into a
+  dozen-plus large species.
+- **Trophic web**: switch on the energy model and one lineage grazing the flora
   field evolves predators that hunt it: an emergent food chain (green plants → red
   animals).
+
+## How it works, briefly
+
+Each cell measures **crowding**: the distance-weighted count of neighbours within its
+reach, divided by its reach area, so it is a density. Each tick it survives if
+crowding sits inside its survival window and breeds if crowding sits inside its
+breeding window (both soft-edged). With metabolic cost on, features cost fertility,
+and a wide survival window also raises the per-tick death risk ("generalist death").
+Without that trade-off, every run converges on immortal grey generalists. Species are
+divergence clusters: each species' reference genome follows its members, and an
+offspring that strays past the threshold founds a new one.
 
 ## Controls
 
@@ -54,8 +68,9 @@ tap/drag paints; blobs, erasing and genome readouts need a mouse and keyboard.
 - `main.js` — UI, interaction, loop, shareable links (`#cfg=…`).
 
 `node smoketest.js` (or `gjs -m smoketest.js`) runs a headless regression over the
-core (reproducibility, the gray-goo attractor, blend-collapse, and that the
-population neither dies instantly nor exceeds the cap); CI runs it on every push.
+core: reproducibility, that costs on keeps a narrower survival window than costs off
+(the gray-goo trade-off), blend collapse, and that the population sustains below the
+cap. CI runs it on every push.
 
 ## License
 
