@@ -20,7 +20,7 @@ python3 -m http.server 8000
 # then open http://localhost:8000/
 ```
 
-Starts paused. **Space** play · **.** step · **R** reset. Choose a scenario from the
+Starts paused. **Space** play · **.** step · **R** reset · **H** hide the UI (just the habitat). Choose a scenario from the
 **preset** menu; hover any control to see what it does. **Copy link** shares a run
 (seed, rules, brush and flora pattern) and **snapshot** saves the habitat as a PNG.
 

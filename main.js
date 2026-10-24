@@ -765,9 +765,25 @@ function snapshot() {
 }
 
 // ---- loop -----------------------------------------------------------------
+function syncPlayButtons() {
+  const b = $('#playbtn'); if (b) b.textContent = ui.playing ? '❚❚ pause' : '▶ play';
+  const c = $('#cornerplay'); c.textContent = ui.playing ? '❚❚' : '▶'; c.setAttribute('aria-label', ui.playing ? 'Pause' : 'Play');
+}
 function togglePlay() {
   ui.playing = !ui.playing;
-  const b = $('#playbtn'); if (b) b.textContent = ui.playing ? '❚❚ pause' : '▶ play';
+  syncPlayButtons();
+}
+
+// Collapsed view: hide the panel, sparklines and readout so the habitat fills the
+// window. The world rescales like any window resize (resize() keeps dynamics intact).
+function toggleUI() {
+  const collapsed = document.body.classList.toggle('collapsed');
+  const t = $('#uitoggle');
+  t.textContent = collapsed ? '⤡' : '⤢';
+  t.setAttribute('aria-label', collapsed ? 'Show controls' : 'Hide controls');
+  t.setAttribute('data-tip', collapsed ? 'Show the controls and charts. (H or Esc)' : 'Hide the controls and charts — just the habitat. (H)');
+  hideTip();   // the layout moved under the cursor; don't leave a stale tip behind
+  resize();
 }
 function singleStep() { step(state, P); pushHist(computeStats(state, P)); }
 
@@ -792,6 +808,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
   else if (e.key === '.') { e.preventDefault(); singleStep(); }
   else if (e.key === 'r' || e.key === 'R') applyInit();
+  else if (e.key === 'h' || e.key === 'H' || (e.key === 'Escape' && document.body.classList.contains('collapsed'))) toggleUI();
 });
 // Some browsers activate a focused button on Space keyup even when keydown was
 // cancelled, which would toggle play twice; swallow it.
@@ -800,9 +817,11 @@ window.addEventListener('keyup', (e) => { if (e.code === 'Space' && e.target.tag
 // ---- help tooltips --------------------------------------------------------
 // One floating element follows the cursor and shows the data-tip of whatever
 // control is under it — read live, so rebuilding the panel needs no re-wiring.
+let hideTip = () => {};
 function setupTips() {
   const tip = el('div'); tip.id = 'uitip'; document.body.appendChild(tip);
   let cur = null;
+  hideTip = () => { cur = null; tip.style.display = 'none'; };
   const place = (e) => {
     let x = e.clientX + 18, y = e.clientY + 20;
     const w = tip.offsetWidth, h = tip.offsetHeight;
@@ -825,7 +844,11 @@ function setupTips() {
 setupTips();
 resize();
 const coarse = window.matchMedia && matchMedia('(pointer: coarse)').matches;
-$('#starthint').innerHTML = coarse ? 'tap <b>▶ play</b> below to start' : 'press <kbd>Space</kbd> to start';
+$('#starthint').innerHTML = coarse ? 'tap <b>▶ play</b> to start' : 'press <kbd>Space</kbd> to start';
+$('#cornerplay').addEventListener('click', togglePlay);
+$('#cornerplay').setAttribute('data-tip', HELP.play);
+$('#uitoggle').addEventListener('click', toggleUI);
+$('#uitoggle').setAttribute('data-tip', 'Hide the controls and charts — just the habitat. (H)');
 const fromLink = cfgPart ? applyConfig(cfgPart.slice(4)) : false;   // shared link: settings first, then seed
 buildSide();
 buildBottom();
@@ -841,6 +864,6 @@ if (runM) { const k = +runM[1]; for (let i = 0; i < k; i++) step(state, P); push
 // this also overrides a preset's autoplay so screenshots don't keep stepping.
 if (devHash.length > 0) {
   ui.playing = devHash.includes('play');
-  const pb = $('#playbtn'); if (pb) pb.textContent = ui.playing ? '❚❚ pause' : '▶ play';
+  syncPlayButtons();
 }
 requestAnimationFrame(frame);
