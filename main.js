@@ -81,29 +81,31 @@ const f2 = (v) => (Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
 // Plain-language help for every control/term — shown as a hover tooltip so new
 // users know what each knob does. "Crowding" = the kernel-weighted neighbor count.
 const HELP = {
-  rScale: 'Perception range. This cell senses neighbors out to R × rScale — bigger means it sees more of its surroundings (but sensing far costs offspring via kSense).',
-  sLo: 'Survival lower bound. If local crowding drops below this, the cell dies of loneliness (the Allee effect). Raise it and isolated cells and expansion fronts die back.',
-  sHi: 'Survival upper bound. If local crowding rises above this, the cell dies of overcrowding. Lower it and cells can only persist in thin, sparse structures.',
-  bLo: 'Birth lower bound. The cell only reproduces when local crowding is at least this — it needs some company to breed.',
-  bHi: 'Birth upper bound. The cell stops reproducing above this crowding, so the birth window is [bLo, bHi].',
-  fecundity: 'Base chance per tick of emitting one offspring while inside the birth band (before metabolic cost is subtracted).',
-  dDisp: 'Dispersal distance: how far, on average, offspring are placed from the parent. Short = children reinforce local structure; long = they colonise gaps.',
-  dCV: 'Dispersal variability (coefficient of variation). 0 = every child lands at the same distance; higher = a wide spread of distances.',
-  step: 'Motility: how far the cell random-walks each tick. Costs offspring via kMove.',
-  taxis: 'Density steering. +1 = climb toward crowding (aggregate), −1 = flee crowding (disperse/repel), 0 = pure random walk. Costs offspring via kTaxis.',
-  trophic: 'Feeding strategy (only matters when the energy model is on). 0 = pure autotroph ("plant"): harvest the resource field directly. 1 = pure heterotroph ("animal"): prey on nearby cells. A convex trade-off (specialization) makes the extremes more efficient than a jack-of-both middle, so a lineage can split into plants and animals.',
+  // Gene tooltips: a plain-language reading first, then the exact mechanics. The
+  // first line names the friendly label with its code name, which is what sim.js uses.
+  rScale: 'Reach (rScale)\n\nHow far this cell can sense its neighbours. Everything it reacts to (crowding, steering, choosing a mate, and, for predators, who it can eat) happens within this distance.\n\nHow it works: sensing radius = R × reach, where R is the world’s base interaction radius. A neighbour at distance d inside that radius adds (1 − d²/r²)² to the cell’s crowding, so near neighbours count fully and distant ones barely. Range 0.5–1.5. Costs kSense × reach².',
+  sLo: 'Loneliness limit (sLo)\n\nThe least company this cell can live with. If its neighbourhood thins out below this, it dies of loneliness (the Allee effect). Raise it and isolated cells and advancing edges die back.\n\nHow it works: the lower bound of the survival window. Each tick, survival chance = smoothstep up across [limit − σ, limit + σ] × smoothstep down across the crowding limit, where σ is the softness rule. Measured in crowding units (weighted neighbour count); range 0–6.',
+  sHi: 'Crowding limit (sHi)\n\nThe most crowding this cell can bear. Pack its neighbourhood tighter than this and it dies of overcrowding. Lower it and cells can only persist in thin, sparse structures.\n\nHow it works: the upper bound of the survival window [loneliness limit, crowding limit], with a soft edge of ±σ. If it ends up below the loneliness limit, the two are swapped. Range 0–6. A wider window costs kTol.',
+  bLo: 'Breeding company (bLo)\n\nHow much company this cell needs before it will breed. Below this, it can still survive but won’t reproduce.\n\nHow it works: the lower bound of the breeding window [breeding company, nursery limit], with a soft edge of ±σ. Only cells that survive the tick can breed. Each tick, birth chance = fertility × window × cost factor. Range 0–6. A wider window costs kTol.',
+  bHi: 'Nursery limit (bHi)\n\nThe most crowding at which this cell will still breed. Above this, it stops reproducing even if it survives.\n\nHow it works: the upper bound of the breeding window [breeding company, nursery limit], with a soft edge of ±σ. If it ends up below breeding company, the two are swapped. Range 0–6. A wider window costs kTol.',
+  fecundity: 'Fertility (fecundity)\n\nHow eagerly this cell reproduces when conditions suit it.\n\nHow it works: the base chance per tick of producing one offspring while inside the breeding window. With metabolic cost on, it is multiplied by e^(−cost), where cost = kMove·(restlessness/R)² + kSense·reach² + kTol·(window widths)/12 + kTaxis·sociability². With the energy model on, cost is paid in energy instead, and the cell must also have banked 1.4 × breed cost. Range 0–0.30.',
+  dDisp: 'Seed throw (dDisp)\n\nHow far from the parent its offspring land. Short throws reinforce the local cluster; long throws colonise gaps and new ground.\n\nHow it works: offspring are placed in a random direction at distance |throw × (1 + scatter × N(0,1))|, where N is a standard normal draw. Range 0.2R–3R, in world units. It scales with R, so it stays proportional when the window resizes.',
+  dCV: 'Throw scatter (dCV)\n\nHow consistent the seed throw is. At 0, every offspring lands at exactly the throw distance; higher values spread them anywhere from close by to far away.\n\nHow it works: the coefficient of variation of the throw distance. Distance = |throw × (1 + scatter × N(0,1))|. Range 0–1.',
+  step: 'Restlessness (step)\n\nHow far this cell moves each tick. Sessile cells hold their ground; restless ones roam and mix.\n\nHow it works: each tick the cell moves exactly this distance, in a direction mixed from a random heading and its sociability steering. Range 0–0.3R, in world units, scaled with R. Costs kMove × (restlessness/R)².',
+  taxis: 'Sociability (taxis)\n\nWhether this cell drifts toward company or away from it. +1 = seeks crowds (aggregates into clumps), −1 = shuns them (spreads out), 0 = wanders at random.\n\nHow it works: direction = (1 − |s|) × random heading + s × ĝ, normalised, where ĝ points up the local crowding gradient (toward denser neighbours, within reach). Range −1 to +1. Costs kTaxis × sociability².',
+  trophic: 'Diet (trophic)\n\nWhat this cell eats when the energy model is on. 0 = pure “plant”: grazes the resource field. 1 = pure “animal”: preys on neighbouring cells. Has no effect while the energy model is off.\n\nHow it works: grazing efficiency = (1 − diet)^p and hunting efficiency = diet^p, where p is the specialization rule. When p > 1, generalists are worse at both, so selection pushes lineages to the extremes. A hunter drains predation × its efficiency × closeness × (1 − the prey’s hunting efficiency) from each neighbour in reach per tick, and keeps a predGain share of it. Cells with diet ≥ 0.5 count as animals. Range 0–1.',
   sigma: 'Band-edge softness. Birth/death thresholds are fuzzy, not hard: σ is the half-width of the smooth transition around each bound. Small σ ≈ crisp, Conway-like rules; large σ = gradual.',
   maxAgeToggle: 'When on, cells also die of old age once they pass "max age". Off by default — death is otherwise purely density-driven.',
   maxAge: 'Ticks a cell can live before dying of old age (only when max-age death is on).',
   maxPop: 'Maximum living population — births are rejected above it. The ecology often self-limits below it anyway; raise it for denser worlds. The hard ceiling is the array buffer (50k cells).',
   capOff: 'Remove the population limit: let the world grow until it hits the buffer ceiling (50k cells, where births are rejected to protect memory and framerate). Large populations run slower.',
   costs: 'Metabolic cost. When ON, sensing far, moving fast, tolerating a wide density range, and steering all reduce fecundity. Turn it OFF to watch every gene run to its extreme and the board collapse into a grey monoculture — the degenerate attractor.',
-  kMove: 'Cost weight on motility (step²). Higher makes fast movement more expensive in offspring.',
-  kSense: 'Cost weight on perception (rScale²). Higher makes seeing far more expensive.',
-  kTol: 'Cost weight on niche breadth. Higher makes tolerating a wide survival/birth range more expensive.',
-  kTaxis: 'Cost weight on steering (taxis²). Higher makes deliberate movement more expensive.',
+  kMove: 'Cost weight on restlessness: adds kMove × (restlessness/R)² to a cell’s cost. Higher makes moving far each tick more expensive.',
+  kSense: 'Cost weight on reach: adds kSense × reach² to a cell’s cost. Higher makes sensing far more expensive.',
+  kTol: 'Cost weight on tolerance: adds kTol × (width of the survival window + width of the breeding window)/12 to a cell’s cost. Higher makes tolerating a wide range of crowding more expensive.',
+  kTaxis: 'Cost weight on sociability: adds kTaxis × sociability² to a cell’s cost. Higher makes deliberate steering (toward or away from crowds) more expensive.',
   recomb: 'How offspring inherit genes. clonal = copy one parent. crossover = mix two nearby parents gene-by-gene. blend = average two parents (this halves genetic variance every generation — included to demonstrate evolutionary collapse).',
-  mutation: 'gaussian = each gene is randomly nudged with probability μ. cornered = same, but the four threshold genes (sLo, sHi, bLo, bHi) are also pulled toward the ends of their range, resisting a mushy middle where no structure survives.',
+  mutation: 'gaussian = each gene is randomly nudged with probability μ. cornered = same, but the four threshold genes (loneliness limit, crowding limit, breeding company, nursery limit) are also pulled toward the ends of their range, resisting a mushy middle where no structure survives.',
   mu: 'Mutation rate: the per-gene probability that a gene is nudged when an offspring is born.',
   sigmaG: 'Mutation size: the standard deviation of each nudge, as a fraction of that gene’s full range.',
   macroRate: 'Macromutation rate. Most mutations are small nudges; this fraction are outsized "knockouts" that re-roll a whole gene at random — a big, could-be-good-or-bad jump. Rare large jumps are what leap across the genus threshold and found new genera.',
@@ -111,7 +113,7 @@ const HELP = {
   speciesThreshold: 'Species threshold (genetic distance, the FINE tier). When an offspring drifts this far from its species’ founding genome, it founds a new species within the same genus. Lower = species split more readily; 0 = never.',
   genusThreshold: 'Genus threshold (genetic distance, the COARSE tier). When an offspring drifts this far from its genus’ founding genome, it founds a new genus (and a new species inside it). Set it above the species threshold; genus = the larger colour family, species = the shade within it. 0 = off.',
   isolation: 'Reproductive isolation (genetic distance). With crossover, a second parent must be within this distance of the first, so diverged species stop interbreeding and can drift apart. 0 = off (mate with any neighbour).',
-  color: 'phenotype = colour encodes the genome (hue = niche centre, saturation = niche breadth, lightness = motility) — similar genomes look similar. genealogy = each founder lineage gets a distinct base hue and every speciation steps the colour a little, so related species share a colour family and drift step-wise. trophic = green autotrophs ("plants") → red heterotrophs ("animals"), brightness = current energy (needs the energy model on).',
+  color: 'phenotype = colour encodes the genome (hue = the middle of its survival window, saturation = how narrow that window is, lightness = restlessness) — similar genomes look similar. genealogy = each founder lineage gets a distinct base hue and every speciation steps the colour a little, so related species share a colour family and drift step-wise. trophic = green autotrophs ("plants") → red heterotrophs ("animals"), brightness = current energy (needs the energy model on).',
   energy: 'Energy / trophic model. When ON, every cell carries an energy budget: it pays metabolic upkeep each tick (more complex genomes cost more), FEEDS to refill it — autotrophs harvest the resource field (the olive gradient), heterotrophs prey on nearby cells — STARVES if energy hits zero, and must bank enough energy to reproduce. The `trophic` gene sets the mix, so selection can split a lineage into plants and animals. (Replaces the fecundity-discount cost model while on.)',
   fieldContrast: 'Patchiness of the resource field. 0 = flat (food everywhere), 1 = high-contrast peaks and deserts. Patchier fields reward autotrophs that sit in the rich spots and push others to prey instead.',
   fieldRegrow: 'How fast the resource field refills toward its local capacity each tick ("sunlight"). Low = grazed patches stay bare for a while, so autotrophs must spread out; high = food comes back fast.',
@@ -119,7 +121,7 @@ const HELP = {
   predRate: 'Predation rate: energy a pure animal drains from a neighbour per tick. Raise it to make hunting pay better and animals dominate (until they eat all the plants).',
   trophicExp: 'Specialization curve. 1 = a generalist is as good as a specialist (no split). Above 1, being half-plant-half-animal is inefficient, so disruptive selection pushes cells to the pure-plant and pure-animal extremes — the cleaner the split.',
   upkeep: 'Base metabolic energy drained every tick, regardless of genome. Higher = cells starve sooner and must feed more actively.',
-  geneCost: 'Extra upkeep charged per unit of genome complexity (far perception, fast motility, wide tolerance, strong steering). This is the "greater features cost more food" term — elaborate cells must out-feed simple ones to survive.',
+  geneCost: 'Extra upkeep charged per unit of genome complexity (long reach, high restlessness, wide survival/breeding windows, strong sociability). This is the "greater features cost more food" term — elaborate cells must out-feed simple ones to survive.',
   birthCost: 'Energy a parent invests into each offspring (the child starts life with it). A cell must bank ~1.4× this to breed, so reproduction is a real energy decision, not free.',
   lines: 'Draw a link between cells that perceive each other. Solid = mutual perception, dashed = one-way (a real consequence of different rScale). Line opacity follows perception strength, so links fade in and out as cells drift.',
   seed: 'Random seed. The same seed plus the same parameters reproduces a run exactly — in the same window size, since the habitat scales with the window. (The resource field is re-randomized on every reset, so trophic runs vary each time; a shared link pins it.)',
@@ -143,6 +145,11 @@ const HELP = {
   sparkSpecies: 'Number of distinct surviving species (the fine tier). Rises as genomes diverge past the species threshold and falls as species go extinct. Founder-lineage and genus counts are in the top-left readout.',
   sparkShare: 'Population share of the founder lineages over time, as a stacked band. Watch one lineage competitively exclude the others (a band swallowing the rest) or a stable coexistence hold. Grey = any later-founded lineages lumped together.',
 };
+
+// Friendly on-screen names for the genes. The code names (GENE_NAMES) stay the
+// vocabulary of sim.js, shared links and the tooltips' first line.
+const GENE_LABELS = ['reach', 'loneliness limit', 'crowding limit', 'breeding company', 'nursery limit',
+  'fertility', 'seed throw', 'throw scatter', 'restlessness', 'sociability', 'diet'];
 
 const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Motile swarm', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web'];
 // short, persistent one-liners shown under the preset menu (no hover needed)
@@ -262,10 +269,11 @@ function buildSide() {
   // Brush genome
   const rr = geneR();
   const geneRows = GENE_NAMES.map((name, g) => slider(
-    name, rr[g][0], rr[g][1], (rr[g][1] - rr[g][0]) / 200,
+    GENE_LABELS[g], rr[g][0], rr[g][1], (rr[g][1] - rr[g][0]) / 200,
     () => brush[g], (v) => { brush[g] = v; markBrushDirty(); },
     g === GENE.fecundity ? ((v) => v.toFixed(3)) : f2, HELP[name],
   ));
+  for (const r of geneRows) r.classList.add('stack');   // long names: label on its own line
   side.append(section('Brush genome', [
     ...geneRows,
     el('div', { class: 'grid2' }, [button('randomize', randomizeBrush, '', HELP.randomize), button('copy hovered', copyHovered, '', HELP.copyHovered)]),
@@ -323,7 +331,7 @@ function buildBottom() {
     sparkCanvases[id] = cvs;
   }
   makeSpark('pop', 'population', false, HELP.sparkPop);
-  const dd = select(GENE_NAMES.map((n, i) => [String(i), n]), String(selGene), (v) => { selGene = parseInt(v, 10); });
+  const dd = select(GENE_LABELS.map((n, i) => [String(i), n]), String(selGene), (v) => { selGene = parseInt(v, 10); });
   makeSpark('gene', 'gene', false, HELP.sparkGene, dd);
   makeSpark('vi', 'variance', true, HELP.sparkVar);
   makeSpark('lin', 'species', false, HELP.sparkSpecies);
@@ -695,7 +703,7 @@ function updateTooltip(e) {
   const tip = $('#tooltip');
   if (ui.hovered < 0) { tip.style.display = 'none'; return; }
   const base = ui.hovered * G;
-  const rows = GENE_NAMES.map((n, g) => `<span class="k">${n}</span> ${g === GENE.fecundity ? state.genome[base + g].toFixed(3) : f2(state.genome[base + g])}`);
+  const rows = GENE_LABELS.map((n, g) => `<span class="k">${n}</span> ${g === GENE.fecundity ? state.genome[base + g].toFixed(3) : f2(state.genome[base + g])}`);
   const en = P.energyOn ? ` · <span class="k">e</span> ${state.energy[ui.hovered].toFixed(1)}` : '';
   const sp = state.species[ui.hovered];
   tip.innerHTML = `<b>#${ui.hovered}</b> · lin ${state.lineage[ui.hovered]} · genus ${state.spGenus[sp]} · sp ${sp} · age ${state.age[ui.hovered] | 0}${en}<br>` + rows.join('<br>');

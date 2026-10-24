@@ -55,6 +55,8 @@ section > h2 { font-family: var(--sans); font-weight: 600; font-size: 18px; lett
 .ctrl { display: grid; grid-template-columns: 128px 1fr 72px; align-items: center; gap: 12px; margin: 7px 0; }
 .ctrl label { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctrl output { text-align: right; color: var(--ink); }
+.ctrl.stack { grid-template-columns: 1fr 72px; row-gap: 2px; }
+.ctrl.stack label { grid-column: 1 / -1; overflow: visible; white-space: normal; }
 
 input[type=range] { -webkit-appearance: none; appearance: none; height: 5px; background: var(--divider); border-radius: 3px; outline: none; }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--ink); cursor: pointer; border: none; }
@@ -91,7 +93,7 @@ input[type=number], input[type=text] { cursor: text; width: 100%; }
 
 #uitip {
   position: fixed; z-index: 20; pointer-events: none; display: none;
-  max-width: 340px; padding: 11px 14px; font-size: 16px; line-height: 1.45;
+  max-width: 420px; padding: 11px 14px; font-size: 16px; line-height: 1.45; white-space: pre-line;
   color: var(--ink); background: rgba(20, 18, 15, 0.97); border: 1px solid var(--divider);
   border-radius: 6px; box-shadow: 0 6px 22px rgba(0,0,0,0.5);
 }
