@@ -50,8 +50,9 @@ export function speciesHSL(state, sp, ranges) {
         const hue = ((pc[0] + (t >= 0 ? 1 : -1) * (80 + 44 * Math.abs(t))) % 360 + 360) % 360;
         cache[id] = [hue, 64, 56];
       } else {                                   // species within a genus: clear hue + lightness step
-        const hue = ((pc[0] + 42 * t) % 360 + 360) % 360;
-        const light = Math.max(36, Math.min(78, pc[2] + (t >= 0 ? 8 : -8)));
+        // a minimum step so every split is visible, larger for bigger divergences
+        const hue = ((pc[0] + (t >= 0 ? 1 : -1) * (18 + 30 * Math.abs(t))) % 360 + 360) % 360;
+        const light = Math.max(36, Math.min(78, pc[2] + (t >= 0 ? 9 : -9)));
         cache[id] = [hue, 64, light];
       }
     }

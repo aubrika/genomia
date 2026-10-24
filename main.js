@@ -17,7 +17,8 @@ const freshFieldSeed = () => { fieldNonce = (fieldNonce + 0x9e3779b1) >>> 0; ret
 let pinnedFieldSeed = null;   // set by a shared link: the next reset reuses that flora pattern instead
 const view = { scale: 1, ox: 0, oy: 0 };
 const ui = { playing: false, colorMode: 'lineage', showLines: true, lineCap: 20000, hovered: -1 };
-const init = { population: 6000, layout: 'uniform', k: 6, genomeInit: 'tworand', spread: 0.03, blobN: 60, blobJitter: 26, seed: 12345 };
+const INIT_DEFAULTS = { population: 10000, layout: 'uniform', k: 6, genomeInit: 'tworand', spread: 0.03, blobN: 60, blobJitter: 26, seed: 12345 };
+const init = Object.assign({}, INIT_DEFAULTS);
 let selGene = GENE.step;
 let curPreset = -1;   // index of the last-applied preset (-1 = the default two-lineage scene)
 
@@ -83,9 +84,9 @@ const f2 = (v) => (Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
 const HELP = {
   // Gene tooltips: a plain-language reading first, then the exact mechanics. The
   // first line names the friendly label with its code name, which is what sim.js uses.
-  rScale: 'Reach (rScale)\n\nHow far this cell can sense its neighbours. Everything it reacts to (crowding, steering, choosing a mate, and, for predators, who it can eat) happens within this distance.\n\nHow it works: sensing radius = R × reach, where R is the world’s base interaction radius. A neighbour at distance d inside that radius adds (1 − d²/r²)² to the cell’s crowding, so near neighbours count fully and distant ones barely. Range 0.5–1.5. Costs kSense × reach².',
-  sLo: 'Loneliness limit (sLo)\n\nThe least company this cell can live with. If its neighbourhood thins out below this, it dies of loneliness (the Allee effect). Raise it and isolated cells and advancing edges die back.\n\nHow it works: the lower bound of the survival window. Each tick, survival chance = smoothstep up across [limit − σ, limit + σ] × smoothstep down across the crowding limit, where σ is the softness rule. Measured in crowding units (weighted neighbour count); range 0–6.',
-  sHi: 'Crowding limit (sHi)\n\nThe most crowding this cell can bear. Pack its neighbourhood tighter than this and it dies of overcrowding. Lower it and cells can only persist in thin, sparse structures.\n\nHow it works: the upper bound of the survival window [loneliness limit, crowding limit], with a soft edge of ±σ. If it ends up below the loneliness limit, the two are swapped. Range 0–6. A wider window costs kTol.',
+  rScale: 'Reach (rScale)\n\nHow far this cell can sense its neighbours. Everything it reacts to (crowding, steering, choosing a mate, and, for predators, who it can eat) happens within this distance. A longer reach averages over more neighbours, so it reads crowding more reliably, but it costs more.\n\nHow it works: sensing radius r = R × reach, where R is the world’s base interaction radius. A neighbour at distance d inside r adds (1 − d²/r²)², so near neighbours count fully and distant ones barely. That sum is divided by reach², which makes crowding a density: the same neighbourhood reads the same crowding whatever the reach. Range 0.5–1.5. Costs kSense × reach².',
+  sLo: 'Loneliness limit (sLo)\n\nThe least company this cell can live with. If its neighbourhood thins out below this, it dies of loneliness (the Allee effect). Raise it and isolated cells and advancing edges die back.\n\nHow it works: the lower bound of the survival window. Each tick, survival chance = smoothstep up across [limit − σ, limit + σ] × smoothstep down across the crowding limit, where σ is the softness rule. With metabolic cost on, a wide window also carries a standing death risk (see generalist death). Measured in crowding units (weighted neighbours per base-reach area); range 0–6.',
+  sHi: 'Crowding limit (sHi)\n\nThe most crowding this cell can bear. Pack its neighbourhood tighter than this and it dies of overcrowding. Lower it and cells can only persist in thin, sparse structures.\n\nHow it works: the upper bound of the survival window [loneliness limit, crowding limit], with a soft edge of ±σ. If it ends up below the loneliness limit, the two are swapped. Range 0–6. A wider window costs kTol in fertility and, with metabolic cost on, raises the per-tick death chance by generalist death × width/6.',
   bLo: 'Breeding company (bLo)\n\nHow much company this cell needs before it will breed. Below this, it can still survive but won’t reproduce.\n\nHow it works: the lower bound of the breeding window [breeding company, nursery limit], with a soft edge of ±σ. Only cells that survive the tick can breed. Each tick, birth chance = fertility × window × cost factor. Range 0–6. A wider window costs kTol.',
   bHi: 'Nursery limit (bHi)\n\nThe most crowding at which this cell will still breed. Above this, it stops reproducing even if it survives.\n\nHow it works: the upper bound of the breeding window [breeding company, nursery limit], with a soft edge of ±σ. If it ends up below breeding company, the two are swapped. Range 0–6. A wider window costs kTol.',
   fecundity: 'Fertility (fecundity)\n\nHow eagerly this cell reproduces when conditions suit it.\n\nHow it works: the base chance per tick of producing one offspring while inside the breeding window. With metabolic cost on, it is multiplied by e^(−cost), where cost = kMove·(restlessness/R)² + kSense·reach² + kTol·(window widths)/12 + kTaxis·sociability². With the energy model on, cost is paid in energy instead, and the cell must also have banked 1.4 × breed cost. Range 0–0.30.',
@@ -99,9 +100,10 @@ const HELP = {
   maxAge: 'Ticks a cell can live before dying of old age (only when max-age death is on).',
   maxPop: 'Maximum living population — births are rejected above it. The ecology often self-limits below it anyway; raise it for denser worlds. The hard ceiling is the array buffer (50k cells).',
   capOff: 'Remove the population limit: let the world grow until it hits the buffer ceiling (50k cells, where births are rejected to protect memory and framerate). Large populations run slower.',
-  costs: 'Metabolic cost. When ON, sensing far, moving fast, tolerating a wide density range, and steering all reduce fecundity. Turn it OFF to watch every gene run to its extreme and the board collapse into a grey monoculture — the degenerate attractor.',
+  costs: 'Metabolic cost. When ON, features cost something: long reach, restlessness, wide crowding tolerance and strong sociability reduce fertility (the k weights below), and a wide survival window also raises the chance of dying each tick (generalist death). Turn it OFF and tolerance is free: every lineage evolves the widest possible survival and breeding windows, fertility maxes out and the colour drains to grey: gray goo.',
   kMove: 'Cost weight on restlessness: adds kMove × (restlessness/R)² to a cell’s cost. Higher makes moving far each tick more expensive.',
   kSense: 'Cost weight on reach: adds kSense × reach² to a cell’s cost. Higher makes sensing far more expensive.',
+  kTolDeath: 'Generalist death: the extra chance per tick of dying for a cell whose survival window spans the whole crowding range (0–6), scaled down linearly for narrower windows. It is the trade-off that stops every lineage from evolving into an immortal generalist: a wide window survives more conditions but dies more often in all of them. Applies while metabolic cost is on and the energy model is off (the energy model has its own upkeep).',
   kTol: 'Cost weight on tolerance: adds kTol × (width of the survival window + width of the breeding window)/12 to a cell’s cost. Higher makes tolerating a wide range of crowding more expensive.',
   kTaxis: 'Cost weight on sociability: adds kTaxis × sociability² to a cell’s cost. Higher makes deliberate steering (toward or away from crowds) more expensive.',
   recomb: 'How offspring inherit genes. clonal = copy one parent. crossover = mix two nearby parents gene-by-gene. blend = average two parents (this halves genetic variance every generation — included to demonstrate evolutionary collapse).',
@@ -110,8 +112,8 @@ const HELP = {
   sigmaG: 'Mutation size: the standard deviation of each nudge, as a fraction of that gene’s full range.',
   macroRate: 'Macromutation rate. Most mutations are small nudges; this fraction are outsized "knockouts" that re-roll a whole gene at random — a big, could-be-good-or-bad jump. Rare large jumps are what leap across the genus threshold and found new genera.',
   kappa: 'Cornered pull strength: how hard threshold genes are pushed toward their range ends (only in "cornered" mutation).',
-  speciesThreshold: 'Species threshold (genetic distance, the FINE tier). When an offspring drifts this far from its species’ founding genome, it founds a new species within the same genus. Lower = species split more readily; 0 = never.',
-  genusThreshold: 'Genus threshold (genetic distance, the COARSE tier). When an offspring drifts this far from its genus’ founding genome, it founds a new genus (and a new species inside it). Set it above the species threshold; genus = the larger colour family, species = the shade within it. 0 = off.',
+  speciesThreshold: 'Species threshold (genetic distance, the FINE tier). Each species keeps a reference genome that follows its members as they drift. An offspring that differs from that reference by more than this founds a new species within the same genus, so a species splits only when part of it diverges from the rest. Lower = species split more readily; 0 = never.',
+  genusThreshold: 'Genus threshold (genetic distance, the COARSE tier). Like the species threshold, but measured from the genus’ reference genome (which also follows its members): an offspring beyond this founds a new genus (and a new species inside it). Set it above the species threshold; genus = the larger colour family, species = the shade within it. 0 = off.',
   isolation: 'Reproductive isolation (genetic distance). With crossover, a second parent must be within this distance of the first, so diverged species stop interbreeding and can drift apart. 0 = off (mate with any neighbour).',
   color: 'phenotype = colour encodes the genome (hue = the middle of its survival window, saturation = how narrow that window is, lightness = restlessness) — similar genomes look similar. genealogy = each founder lineage gets a distinct base hue and every speciation steps the colour a little, so related species share a colour family and drift step-wise. trophic = green autotrophs ("plants") → red heterotrophs ("animals"), brightness = current energy (needs the energy model on).',
   energy: 'Energy / trophic model. When ON, every cell carries an energy budget: it pays metabolic upkeep each tick (more complex genomes cost more), FEEDS to refill it — autotrophs harvest the resource field (the olive gradient), heterotrophs prey on nearby cells — STARVES if energy hits zero, and must bank enough energy to reproduce. The `trophic` gene sets the mix, so selection can split a lineage into plants and animals. (Replaces the fecundity-discount cost model while on.)',
@@ -151,16 +153,16 @@ const HELP = {
 const GENE_LABELS = ['reach', 'loneliness limit', 'crowding limit', 'breeding company', 'nursery limit',
   'fertility', 'seed throw', 'throw scatter', 'restlessness', 'sociability', 'diet'];
 
-const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Motile swarm', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web'];
+const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Aggregation', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web'];
 // short, persistent one-liners shown under the preset menu (no hover needed)
 const PRESET_BLURBS = [
-  'Tight Conway-like bands — crashes, then blooms back.',
-  'Costs off: every gene runs to its extreme; a grey monoculture.',
-  'Blend inheritance averages parents; genetic variance collapses.',
-  'High motility and taxis; cells self-organise into moving clumps.',
-  'High loneliness threshold; slow, pushed expansion fronts.',
-  'Aggregates with thinned, partly hollow interiors.',
-  'Fast mutation, low threshold; the species count climbs from 1.',
+  'Tight Life-like rules on a lattice: a near-total crash, then surviving colonies spread back.',
+  'Costs off: survival and breeding windows open all the way, and every lineage turns the same grey.',
+  'Blend inheritance averages parents: genetic variance drops ~85% in 100 ticks. Try crossover to compare.',
+  'Strongly sociable cells under a low population limit condense into a few colonies that merge.',
+  'One colony with a high loneliness limit: strays die, so it grows only at its edge, as a steady front.',
+  'Sociable cells with a low crowding limit: packed interiors die, leaving colonies full of holes.',
+  'Fast mutation, local breeding and choosy mates: one founder splits into a dozen-plus large species.',
   'Energy model on: plants graze the flora, animals evolve to hunt them.',
 ];
 
@@ -224,6 +226,7 @@ function buildSide() {
     slider('kMove', 0, 2, 0.05, () => P.kMove, (v) => P.kMove = v, f2, HELP.kMove),
     slider('kSense', 0, 2, 0.05, () => P.kSense, (v) => P.kSense = v, f2, HELP.kSense),
     slider('kTol', 0, 2, 0.05, () => P.kTol, (v) => P.kTol = v, f2, HELP.kTol),
+    (() => { const r = slider('generalist death', 0, 0.15, 0.005, () => P.kTolDeath, (v) => P.kTolDeath = v, (v) => v.toFixed(3), HELP.kTolDeath); r.classList.add('stack'); return r; })(),
     slider('kTaxis', 0, 2, 0.05, () => P.kTaxis, (v) => P.kTaxis = v, f2, HELP.kTaxis),
   ], 'live'));
 
@@ -499,48 +502,59 @@ function captureTracked() {
   trackedCols = trackedLins.map((l) => { const [r, g, b] = hslToRgb(((l * 137.508) % 360 + 360) % 360, 60, 56); return `rgb(${r},${g},${b})`; });
 }
 
+// Presets are whole scenarios over the defaults (see applyPreset). Brush dispersal and
+// motility are in units of R. Each is checked headlessly against its blurb across
+// seeds and window sizes; the comment says what it reliably shows.
 const PRESETS = [
-  { // Conway-ish — a continuous B3/S23-flavored regime: tight low-motility bands,
-    // short dispersal so births reinforce local structure. A full field avalanches
-    // (soft death at the density lower-edge cascades) then blooms back from a
-    // lattice seed into a patchy, oscillator-like population.
-    brush: { rScale: 1.0, sLo: 1.4, sHi: 3.6, bLo: 2.0, bHi: 3.4, fec: 0.24, dDisp: 0.6, dCV: 0.3, step: 0.05, taxis: 0.15 },
-    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', sigma: 0.4 },
-    init: { layout: 'lattice', genomeInit: 'brush', population: 11000, spread: 0.03 },
+  { // Conway-ish — tight Life-like bands from a dense lattice. The synchronous start
+    // overshoots: ~90% die within ~200 ticks, then the surviving colonies spread back
+    // over ~1000 ticks. Low mutation keeps the rules Life-like while they do.
+    brush: { rScale: 1.0, sLo: 0.7, sHi: 3.4, bLo: 1.45, bHi: 2.5, fec: 0.22, dDisp: 0.72, dCV: 0.3, step: 0.035, taxis: -0.15 },
+    P: { mu: 0.02, sigma: 0.6 },
+    init: { layout: 'lattice', genomeInit: 'brush', population: 9000, spread: 0.03 },
   },
-  { // Gray goo
+  { // Gray goo — costs off from 6000 random genomes. Tolerance is free, so survival and
+    // breeding windows open to their limits, fertility maxes out and the habitat fills
+    // to the cap; several lineages survive but all converge on the same grey phenotype.
     brush: { rScale: 1.2, sLo: 0.0, sHi: 6, bLo: 0.0, bHi: 6, fec: 0.30, dDisp: 1.0, dCV: 0.3, step: 0.10, taxis: 0.0 },
-    P: { costsOn: false, recomb: 'crossover', mutation: 'gaussian' },
+    P: { costsOn: false },
     init: { layout: 'uniform', genomeInit: 'uniform', population: 6000 },
+    color: 'phenotype',
   },
-  { // Blend collapse
-    brush: { rScale: 1.0, sLo: 1.5, sHi: 6.0, bLo: 2.5, bHi: 6.0, fec: 0.22, dDisp: 0.8, dCV: 0.3, step: 0.15, taxis: 0.6 },
-    P: { costsOn: true, recomb: 'blend', mutation: 'gaussian' },
-    init: { layout: 'kblobs', genomeInit: 'brush', population: 7000 },
+  { // Blend collapse — a viable clone seeded with extra genetic spread, inherited by
+    // blending. The variance index drops ~85% within ~100 ticks; with crossover the same
+    // start holds and grows its variance instead.
+    brush: { rScale: 1.0, sLo: 0.4, sHi: 4.5, bLo: 0.8, bHi: 3.6, fec: 0.22, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10 },
+    P: { recomb: 'blend' },
+    init: { layout: 'uniform', genomeInit: 'brush', population: 10000, spread: 0.1 },
+    color: 'phenotype',
   },
-  { // Motile swarm
-    brush: { rScale: 1.0, sLo: 1.0, sHi: 6.0, bLo: 2.0, bHi: 6.0, fec: 0.20, dDisp: 0.7, dCV: 0.3, step: 0.22, taxis: 0.7 },
-    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian' },
-    init: { layout: 'uniform', genomeInit: 'brush', population: 6000 },
+  { // Aggregation — strong sociability under a low population limit. The scattered
+    // population thins, then regrows as a few dense colonies that drift and merge until
+    // one to three remain.
+    brush: { rScale: 1.0, sLo: 0.22, sHi: 6.0, bLo: 0.4, bHi: 2.93, fec: 0.27, dDisp: 0.5, dCV: 0.3, step: 0.29, taxis: 0.67 },
+    P: { mu: 0.05, cap: 5000 },
+    init: { layout: 'uniform', genomeInit: 'brush', population: 3500 },
   },
-  { // Allee frontier
-    brush: { rScale: 1.0, sLo: 3.5, sHi: 6.0, bLo: 3.2, bHi: 6.0, fec: 0.20, dDisp: 0.45, dCV: 0.25, step: 0.05, taxis: 0.2 },
-    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian' },
-    init: { layout: 'blob', genomeInit: 'brush', population: 8000 },
+  { // Allee frontier — one colony with a high loneliness limit: cells that stray from
+    // the group die, so the colony grows only at its edge, as a front that sweeps the
+    // habitat over ~1000 ticks.
+    brush: { rScale: 1.0, sLo: 1.24, sHi: 5.9, bLo: 1.57, bHi: 5.2, fec: 0.26, dDisp: 0.5, dCV: 0.17, step: 0.04, taxis: 0.2 },
+    P: { mu: 0.02, sigma: 0.5 },
+    init: { layout: 'blob', genomeInit: 'brush', population: 1500 },
   },
-    { // Membranes (experimental) — aggregate (positive taxis, short dispersal), but a
-    // low overcrowding cap (sHi) kills the crowded interior, leaving a thin shell
-    // around a void. Crucially, a HIGH kTol penalises widening the survival band, so
-    // sHi can't evolve upward and re-fill the centres — the hollows persist over time.
-    brush: { rScale: 1.0, sLo: 0.6, sHi: 2.6, bLo: 0.9, bHi: 2.2, fec: 0.24, dDisp: 0.6, dCV: 0.3, step: 0.05, taxis: 0.8 },
-    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', sigma: 0.4, macroRate: 0.02, kTol: 1.0 },
-    init: { layout: 'uniform', genomeInit: 'brush', population: 6000, spread: 0.03 },
+  { // Membranes — sociable cells pull together, but a low crowding limit kills the
+    // packed interiors, leaving colonies riddled with holes.
+    brush: { rScale: 1.0, sLo: 0.37, sHi: 2.88, bLo: 1.47, bHi: 2.8, fec: 0.24, dDisp: 1.0, dCV: 0.3, step: 0.02, taxis: 0.68 },
+    P: { mu: 0.02, sigma: 0.31, cap: 8000 },
+    init: { layout: 'uniform', genomeInit: 'brush', population: 7000 },
   },
-  { // Species bloom — one founder lineage (clone brush) in a fast, mutating regime
-    // with a low species threshold, so genomes keep diverging past it and the
-    // species count climbs from 1 (a family tree unfurling under genealogy colour).
-    brush: { rScale: 1.0, sLo: 0.6, sHi: 4.0, bLo: 1.0, bHi: 2.6, fec: 0.24, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10 },
-    P: { costsOn: true, recomb: 'crossover', mutation: 'gaussian', mu: 0.25, sigmaG: 0.07, macroRate: 0.08, speciesThreshold: 0.09, genusThreshold: 0.34 },
+  { // Species bloom — one founder under fast mutation, with short dispersal (local
+    // neighbourhoods) and reproductive isolation (mates must be genetically close), so
+    // diverging groups stop interbreeding. By ~800 ticks it holds a dozen-plus large
+    // species (200+ cells) and hundreds of small ones; the largest falls to ~20%.
+    brush: { rScale: 1.0, sLo: 0.6, sHi: 4.0, bLo: 1.0, bHi: 2.6, fec: 0.24, dDisp: 0.6, dCV: 0.3, step: 0.03, taxis: 0.10 },
+    P: { mu: 0.2, sigmaG: 0.06, macroRate: 0.03, isolation: 0.1, speciesThreshold: 0.2, genusThreshold: 0.4 },
     init: { layout: 'uniform', genomeInit: 'brush', population: 4000, spread: 0.02 },
   },
   { // Trophic web — the energy model on over a patchy resource field. One mixed lineage
@@ -555,20 +569,17 @@ const PRESETS = [
     color: 'trophic',
   },
 ];
+// A preset is a whole scenario: every rule and seeding setting starts from the
+// defaults, so the result never depends on what was run before. Only the seed, the
+// blob-brush tools and the window-derived values carry over.
 function applyPreset(i) {
   const pr = PRESETS[i];
   curPreset = i;
-  Object.assign(P, {
-    sigma: DEFAULTS.sigma, genusThreshold: DEFAULTS.genusThreshold, speciesThreshold: DEFAULTS.speciesThreshold,
-    isolation: DEFAULTS.isolation, mu: DEFAULTS.mu, sigmaG: DEFAULTS.sigmaG, macroRate: DEFAULTS.macroRate,
-    kMove: DEFAULTS.kMove, kSense: DEFAULTS.kSense, kTol: DEFAULTS.kTol, kTaxis: DEFAULTS.kTaxis,
-    energyOn: DEFAULTS.energyOn, fieldContrast: DEFAULTS.fieldContrast, fieldRegrow: DEFAULTS.fieldRegrow,
-    autoGain: DEFAULTS.autoGain, predRate: DEFAULTS.predRate, predGain: DEFAULTS.predGain,
-    trophicExp: DEFAULTS.trophicExp, upkeep: DEFAULTS.upkeep, geneCost: DEFAULTS.geneCost, birthCost: DEFAULTS.birthCost,
-  }, pr.P);  // reset varied params to defaults unless the preset sets them
-  setBrush(pr.brush);
-  Object.assign(init, pr.init);
-  if (pr.color) ui.colorMode = pr.color;
+  const keep = { worldW: P.worldW, worldH: P.worldH, R: P.R, fieldSeed: P.fieldSeed };
+  Object.assign(P, DEFAULTS, keep, pr.P);
+  setBrush(Object.assign({ trophic: 0.5 }, pr.brush));
+  Object.assign(init, INIT_DEFAULTS, { seed: init.seed, blobN: init.blobN, blobJitter: init.blobJitter }, pr.init);
+  ui.colorMode = pr.color || 'lineage';
   buildSide();
   applyInit();
   if (!ui.playing) togglePlay();
