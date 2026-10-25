@@ -26,7 +26,7 @@ export function phenotypeHSL(genome, base, R) {
 // hue jump, so each genus is a distinct colour family; a species split within a
 // genus makes a clear-but-smaller hue+lightness step. Step direction comes from the
 // genome change (not a hash), so related clades cluster in colour and drift step-wise.
-const PW = [0.9, -0.7, 0.6, -0.5, 0.8, 0.4, -0.6, 0.5, -0.8, 1.0, 0.7]; // fixed projection weights spread step directions
+const PW = [0.9, -0.7, 0.6, -0.5, 0.8, 0.4, -0.6, 0.5, -0.8, 1.0, 0.7, -0.9]; // fixed projection weights spread step directions
 export function speciesHSL(state, sp, ranges) {
   const cache = state._spColor;
   if (cache[sp]) return cache[sp];
@@ -72,18 +72,23 @@ export function trophicHSL(genome, base, en, emax) {
 }
 
 // Shape. Size is the cell's body (sim.js bodyRadius: reach and fertility). The polygon
-// is a per-SPECIES trait read from the species' reference genome — sociability, from a
-// sharp triangle (shuns crowds) through square, pentagon and hexagon to a circle (seeks
-// crowds) — so each species keeps one consistent shape. Rotation is per cell, from its
-// own genome, so a colony doesn't look stamped. 0 sides = circle.
-export const SHAPE_SIDES = [3, 4, 5, 6, 0];
+// is a per-SPECIES trait read from the species' reference genome, so each species keeps
+// one consistent shape: a species with strong pack instinct (align ≥ 0.5) is a triangle
+// pointing along its heading — you can see which way a pack is going — and otherwise
+// sociability picks square (shuns crowds), pentagon, hexagon or circle (seeks crowds).
+// Other polygons get a per-cell rotation from their own genome. 0 sides = circle.
+export const SHAPE_SIDES = [4, 5, 6, 0];
 export function speciesSides(state, sp) {
   const ref = state.spRef[sp];
   if (!ref) return 0;
+  if (ref[GENE.align] >= 0.5) return 3;
   const k = Math.floor((ref[GENE.taxis] + 1) / 2 * SHAPE_SIDES.length);
   return SHAPE_SIDES[k < 0 ? 0 : k >= SHAPE_SIDES.length ? SHAPE_SIDES.length - 1 : k];
 }
-export function cellRotation(genome, base, R) {
+// Rotation of the first vertex: a triangle's points along the cell's heading.
+export function cellRotation(state, i, sides, R) {
+  if (sides === 3) return state.heading[i];
+  const genome = state.genome, base = i * G;
   let v = genome[base + GENE.dCV] * 7.31 + genome[base + GENE.dDisp] / R * 3.07 + genome[base + GENE.fecundity] * 17.3;
   v -= Math.floor(v);
   return v * 6.283185307179586;
@@ -233,7 +238,7 @@ export function draw(ctx, state, P, view, opts) {
     ctx.beginPath();
     if (sides === 0) ctx.arc(X[i], Y[i], r, 0, 6.283185307179586);
     else {
-      const rot = cellRotation(GEN, base, R), step = 6.283185307179586 / sides;
+      const rot = cellRotation(state, i, sides, R), step = 6.283185307179586 / sides;
       for (let k = 0; k < sides; k++) { const a = rot + k * step; k ? ctx.lineTo(X[i] + r * Math.cos(a), Y[i] + r * Math.sin(a)) : ctx.moveTo(X[i] + r * Math.cos(a), Y[i] + r * Math.sin(a)); }
       ctx.closePath();
     }

@@ -33,6 +33,8 @@ Opens on the **Trophic web** scenario, running (paused if your system asks for r
   species split steps the shade, so the family tree is visible on the habitat.
 - **Species bloom**: one founder under fast mutation and choosy mating splits into
   around ten large species.
+- **Flocks**: strong pack instinct under a low population limit; the population
+  breaks into groups that move together and hold their course.
 - **Trophic web**: switch on the energy model and one lineage grazing the flora
   field evolves predators that hunt it: an emergent food chain (green plants → red
   animals).
@@ -52,7 +54,13 @@ Cells have **solid bodies** (toggle: Rules → bodies). Body size reads the repr
 strategy (long reach and low fertility make a big body), and no two bodies overlap: an
 offspring that can't find free space isn't born, and a blocked move waits. Each cell is
 drawn at its body size; its **shape** is a species trait read from sociability, from a
-triangle (shuns crowds) through square, pentagon and hexagon to a circle (seeks them).
+square (shuns crowds) through pentagon and hexagon to a circle (seeks them). A blocked
+move first tries to slide 60° either way, so dense groups still flow.
+
+Each cell also carries a **heading**, inherited by its offspring. Its **pack instinct**
+gene sets how much it steers by that heading and turns it toward its neighbours'
+average heading, so neighbours fall into step and travel together as a flock.
+Strongly pack-minded species are drawn as triangles pointing the way they're going.
 
 ## Controls
 

@@ -7,7 +7,10 @@ const SEED_TRIES = 8;   // positions a seeded cell tries before it is skipped (b
 // init: { population, layout, k, genomeInit, spread } (see main.js INIT_DEFAULTS).
 // brush: the template genome. Returns the founder the brush now belongs to
 // ({ lineage, species }), or null when every cell founded its own lineage.
-export function seedPopulation(state, P, init, brush) {
+// genomeInit 'packs' also needs brushB: `brush` cells (prey) spread over the habitat by
+// `layout`, plus init.packs compact packs of init.packSize `brushB` cells (a second
+// lineage), each pack starting on one shared heading.
+export function seedPopulation(state, P, init, brush, brushB) {
   const rr = geneRanges(P.R), Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
   const Dm = Math.min(Wx, Wy), n = init.population, rng = state.rng;
   const wx_ = (v) => ((v % Wx) + Wx) % Wx, wy_ = (v) => ((v % Wy) + Wy) % Wy;
@@ -47,6 +50,23 @@ export function seedPopulation(state, P, init, brush) {
       const isA = i < half;
       const pos = () => [isA ? rng.next() * 0.5 * Wx : (0.5 + rng.next() * 0.5) * Wx, rng.next() * Wy];
       place(pos, jitter(new Float32Array(isA ? A : B)), isA ? linA : linB, isA ? spA : spB);
+    }
+    return { lineage: linA, species: spA };
+  }
+
+  if (init.genomeInit === 'packs' && brushB) {
+    const linA = state.nextLineage++, spA = foundClade(state, brush, 0, linA);
+    const linB = state.nextLineage++, spB = foundClade(state, brushB, 0, linB);
+    for (let i = 0; i < n; i++) place(() => [rng.next() * Wx, rng.next() * Wy], jitter(new Float32Array(brush)), linA, spA);
+    const packR = Math.sqrt(init.packSize) * 0.5 * P.R;            // compact: ~R/2 per cell spacing
+    for (let k = 0; k < init.packs; k++) {
+      const cx = rng.next() * Wx, cy = rng.next() * Wy, hd = rng.next() * 6.283185307179586;
+      for (let j = 0; j < init.packSize; j++) {
+        const before = state.count;
+        place(() => { const a = rng.next() * 6.283185307179586, d = Math.sqrt(rng.next()) * packR; return [cx + Math.cos(a) * d, cy + Math.sin(a) * d]; },
+          jitter(new Float32Array(brushB)), linB, spB);
+        if (state.count > before) state.heading[state.count - 1] = hd;
+      }
     }
     return { lineage: linA, species: spA };
   }

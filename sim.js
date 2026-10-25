@@ -7,13 +7,13 @@
 
 import { makeRNG } from './prng.js';
 
-export const G = 11; // genes per agent
+export const G = 12; // genes per agent
 export const GENE = {
   rScale: 0, sLo: 1, sHi: 2, bLo: 3, bHi: 4,
   fecundity: 5, dDisp: 6, dCV: 7, step: 8, taxis: 9,
-  trophic: 10,
+  trophic: 10, align: 11,
 };
-export const GENE_NAMES = ['rScale', 'sLo', 'sHi', 'bLo', 'bHi', 'fecundity', 'dDisp', 'dCV', 'step', 'taxis', 'trophic'];
+export const GENE_NAMES = ['rScale', 'sLo', 'sHi', 'bLo', 'bHi', 'fecundity', 'dDisp', 'dCV', 'step', 'taxis', 'trophic', 'align'];
 
 // Gene ranges. dDisp and step scale with the global interaction radius R, so the
 // dispersal/motility genes are always expressed relative to perception distance.
@@ -31,12 +31,14 @@ export function geneRanges(R) {
     [0, 0.3 * R], // step
     [-1, 1],      // taxis
     [0, 1],       // trophic: 0 = pure autotroph (feed on the field), 1 = pure heterotroph (feed on other cells)
+    [0, 1],       // align: 0 = moves on a fresh random heading each tick, 1 = steers by its own heading, turned toward its neighbours' (flocking)
   ];
 }
 
 export const DEFAULTS = {
   world: 1000, R: 17, sigma: 0.6,
-  costsOn: true, kMove: 0.4, kSense: 0.3, kTol: 0.5, kTaxis: 0.2,
+  costsOn: true, kMove: 0.4, kSense: 0.3, kTol: 0.5, kTaxis: 0.2, kAlign: 0.1,
+  headNoise: 0.3,         // heading jitter per tick (radians, ±): how wobbly a steering cell's course is
   kTolDeath: 0.055,       // generalist mortality: per-tick death chance added at a full-width survival window (costs on, energy off)
   bodiesOn: true,         // cells have solid bodies: births and moves can't overlap another cell's body
   recomb: 'crossover', mutation: 'gaussian', mu: 0.1, sigmaG: 0.05, kappa: 0.15,
@@ -185,6 +187,7 @@ export function createState(cap) {
     genome: new Float32Array(cap * G),
     species: new Int32Array(cap),
     energy: new Float32Array(cap), energy0: 6,
+    heading: new Float32Array(cap),   // direction of travel (radians); inherited by offspring
     // resource field (built lazily when the energy model runs): capacity from
     // spatial noise, current level regrows toward it and is grazed by autotrophs.
     field: null, fieldK: null, fieldNX: 0, fieldNY: 0, _fieldW: -1, _fieldH: -1, _fieldSeed: -1,
@@ -281,6 +284,7 @@ export function addAgent(state, x, y, genomeArr, lineageId, ranges, speciesId) {
   if (state.count >= state.cap) return -1;
   const i = state.count++;
   state.x[i] = x; state.y[i] = y; state.age[i] = 0; state.energy[i] = state.energy0;
+  state.heading[i] = state.rng.next() * 6.283185307179586;
   state.lineage[i] = lineageId != null ? lineageId : state.nextLineage++;
   const base = i * G;
   for (let g = 0; g < G; g++) state.genome[base + g] = genomeArr[g];
@@ -300,6 +304,9 @@ function ensureScratch(state) {
       bg: new Float32Array(cap * G),
       dE: new Float32Array(cap), ae: new Float32Array(cap), pe: new Float32Array(cap), // energy: net feed delta, autotroph & predator efficiencies
       br: new Float32Array(cap), bR: new Float32Array(cap),          // body radii: cells, newborns
+      hux: new Float32Array(cap), huy: new Float32Array(cap),        // heading unit vectors (tick start)
+      mhx: new Float32Array(cap), mhy: new Float32Array(cap),        // neighbours' mean heading (kernel-weighted)
+      bh: new Float32Array(cap),                                     // newborn headings
       gNext: new Int32Array(2 * cap), gPrev: new Int32Array(2 * cap), gCell: new Int32Array(2 * cap), // collision-grid lists (cells + newborns)
       counts: null, cursor: null, gHead: null,
     };
@@ -395,7 +402,7 @@ export function step(state, P) {
   const rng = state.rng;
   const s = ensureScratch(state);
   const { n, gx, gy, survive } = s;
-  const X = state.x, Y = state.y, GEN = state.genome, AGE = state.age, LIN = state.lineage, SPE = state.species;
+  const X = state.x, Y = state.y, GEN = state.genome, AGE = state.age, LIN = state.lineage, SPE = state.species, HD = state.heading;
 
   // Energy model setup: derive each cell's autotroph/heterotroph efficiencies from
   // its trophic gene (a convex trade-off, so specialists beat generalists), and zero
@@ -430,15 +437,18 @@ export function step(state, P) {
   for (let c = 0; c < nc; c++) cursor[c] = counts[c];
   for (let i = 0; i < N; i++) { const c = cellIdx[i]; items[cursor[c]++] = i; }
 
-  // 2. Density n_i (kernel-weighted count) and normalized gradient direction ĝ_i.
+  // 2. Density n_i (kernel-weighted count), normalized gradient direction ĝ_i, and the
+  //    kernel-weighted mean heading of the neighbours (what an aligning cell turns toward).
   const halfWx = Wx / 2, halfWy = Wy / 2;
+  const hux = s.hux, huy = s.huy, mhx = s.mhx, mhy = s.mhy;
+  for (let i = 0; i < N; i++) { hux[i] = Math.cos(HD[i]); huy[i] = Math.sin(HD[i]); }
   for (let i = 0; i < N; i++) {
     const base = i * G;
     const ri = R * GEN[base + GENE.rScale], ri2 = ri * ri;
     const xi = X[i], yi = Y[i];
     const cx = cellIdx[i] % nx, cy = (cellIdx[i] / nx) | 0;
     const pei = eOn ? pe[i] : 0;
-    let acc = 0, agx = 0, agy = 0, dEi = 0;
+    let acc = 0, agx = 0, agy = 0, dEi = 0, ahx = 0, ahy = 0;
     for (let ddy = -1; ddy <= 1; ddy++) {
       const cyy = ((cy + ddy) % ny + ny) % ny;
       for (let ddx = -1; ddx <= 1; ddx++) {
@@ -453,6 +463,7 @@ export function step(state, P) {
           if (d2 < ri2) {
             const wj = 1 - d2 / ri2, wgt = wj * wj; // (1 - u^2)^2
             acc += wgt;
+            ahx += wgt * hux[j]; ahy += wgt * huy[j];
             const d = Math.sqrt(d2);
             if (d > 1e-9) { const inv = wgt / d; agx += inv * dx; agy += inv * dy; }
             // predation: i drains energy from neighbor j; soft prey (low predEff)
@@ -467,6 +478,7 @@ export function step(state, P) {
     // therefore can't be used to feel less crowded.
     const rsi = GEN[base + GENE.rScale];
     n[i] = acc / (rsi * rsi);
+    if (acc > 0) { mhx[i] = ahx / acc; mhy[i] = ahy / acc; } else { mhx[i] = 0; mhy[i] = 0; }
     if (eOn) dE[i] += dEi;
     const gl = Math.hypot(agx, agy);
     if (gl > 1e-12) { gx[i] = agx / gl; gy[i] = agy / gl; } else { gx[i] = 0; gy[i] = 0; }
@@ -489,7 +501,8 @@ export function step(state, P) {
       e += dE[i];
       const st = GEN[base + GENE.step], rs = GEN[base + GENE.rScale], tx = GEN[base + GENE.taxis];
       const tol = ((GEN[base + GENE.sHi] - GEN[base + GENE.sLo]) + (GEN[base + GENE.bHi] - GEN[base + GENE.bLo])) / 12;
-      const complexity = P.kMove * (st / R) * (st / R) + P.kSense * rs * rs + P.kTol * tol + P.kTaxis * tx * tx;
+      const al = GEN[base + GENE.align];
+      const complexity = P.kMove * (st / R) * (st / R) + P.kSense * rs * rs + P.kTol * tol + P.kTaxis * tx * tx + P.kAlign * al * al;
       e -= upkeep + geneCost * complexity;
       EN[i] = e > emax ? emax : e;
     }
@@ -583,7 +596,8 @@ export function step(state, P) {
     if (P.costsOn && !eOn) {
       const st = GEN[base + GENE.step], rs = GEN[base + GENE.rScale], tx = GEN[base + GENE.taxis];
       const tol = ((GEN[base + GENE.sHi] - GEN[base + GENE.sLo]) + (GEN[base + GENE.bHi] - GEN[base + GENE.bLo])) / 12;
-      const cost = P.kMove * (st / R) * (st / R) + P.kSense * rs * rs + P.kTol * tol + P.kTaxis * tx * tx;
+      const al = GEN[base + GENE.align];
+      const cost = P.kMove * (st / R) * (st / R) + P.kSense * rs * rs + P.kTol * tol + P.kTaxis * tx * tx + P.kAlign * al * al;
       feff *= Math.exp(-cost);
     }
     if (rng.next() >= feff * win) continue;
@@ -607,6 +621,7 @@ export function step(state, P) {
     bx[bc] = px; by[bc] = py;
     if (bodies) { bR[bc] = cr; gInsert(N + bc, bucketOf(px, py)); }
     bl[bc] = LIN[i];                       // lineage (founder) is inherited unchanged
+    s.bh[bc] = HD[i];                      // and the parent's heading
     // Divergence taxonomy, coarse first: past the genus threshold => new genus (and a
     // new species inside it, marked as a big colour step); else past the species
     // threshold => new species in the same genus; else inherit both.
@@ -630,19 +645,38 @@ export function step(state, P) {
     bc++;
   }
 
-  // 5. Movement — blended random walk + density taxis, scaled by `step`.
+  // 5. Movement. Each cell first updates its heading: it turns toward its neighbours'
+  //    mean heading by its alignment gene (a = 0 ignores them), then jitters by ±headNoise.
+  //    Its direction blends a fresh random heading (weight 1 − a) with that steered
+  //    heading (weight a), then density taxis as before; it moves `step` along it.
+  //    With bodies on, a blocked move slides: it tries the direction rotated ±60° (random
+  //    order) before staying put, so packed groups can still flow.
+  const headNoise = P.headNoise;
   for (let i = 0; i < N; i++) {
     if (!survive[i]) continue;
-    const base = i * G, st = GEN[base + GENE.step], tx = GEN[base + GENE.taxis];
+    const base = i * G, st = GEN[base + GENE.step], tx = GEN[base + GENE.taxis], al = GEN[base + GENE.align];
+    let hx = hux[i], hy = huy[i];
+    if (al > 0) { hx = (1 - al) * hx + al * mhx[i]; hy = (1 - al) * hy + al * mhy[i]; }
+    const h = (hx * hx + hy * hy > 1e-12 ? Math.atan2(hy, hx) : HD[i]) + (rng.next() - 0.5) * 2 * headNoise;
+    HD[i] = h;
     const ang = rng.next() * 6.283185307179586;
-    const rxu = Math.cos(ang), ryu = Math.sin(ang), at = Math.abs(tx);
-    let dx = (1 - at) * rxu + tx * gx[i];
-    let dy = (1 - at) * ryu + tx * gy[i];
+    const ux = (1 - al) * Math.cos(ang) + al * Math.cos(h), uy = (1 - al) * Math.sin(ang) + al * Math.sin(h);
+    const at = Math.abs(tx);
+    let dx = (1 - at) * ux + tx * gx[i];
+    let dy = (1 - at) * uy + tx * gy[i];
     const dl = Math.hypot(dx, dy);
-    if (dl > 1e-9) { dx /= dl; dy /= dl; } else { dx = rxu; dy = ryu; }
-    const mx = wrap(X[i] + dx * st, Wx), my = wrap(Y[i] + dy * st, Wy);
-    if (!bodies) { X[i] = mx; Y[i] = my; }
-    else if (fits(mx, my, br[i], i)) {                   // blocked => stay put this tick
+    if (dl > 1e-9) { dx /= dl; dy /= dl; } else { dx = Math.cos(ang); dy = Math.sin(ang); }
+    if (!bodies) { X[i] = wrap(X[i] + dx * st, Wx); Y[i] = wrap(Y[i] + dy * st, Wy); AGE[i] += 1; continue; }
+    let mx = wrap(X[i] + dx * st, Wx), my = wrap(Y[i] + dy * st, Wy), ok = fits(mx, my, br[i], i);
+    if (!ok && st > 0) {
+      const sgn = rng.next() < 0.5 ? 1 : -1;
+      for (let k = 0; k < 2 && !ok; k++) {
+        const c = 0.5, sn = (k === 0 ? sgn : -sgn) * 0.8660254037844386;   // cos/sin 60°
+        const rdx = dx * c - dy * sn, rdy = dx * sn + dy * c;
+        mx = wrap(X[i] + rdx * st, Wx); my = wrap(Y[i] + rdy * st, Wy); ok = fits(mx, my, br[i], i);
+      }
+    }
+    if (ok) {
       const c = bucketOf(mx, my);
       if (c !== gCell[i]) { gRemove(i); gInsert(i, c); }
       X[i] = mx; Y[i] = my;
@@ -655,7 +689,7 @@ export function step(state, P) {
   for (let i = 0; i < N; i++) {
     if (!survive[i]) continue;
     if (w !== i) {
-      X[w] = X[i]; Y[w] = Y[i]; AGE[w] = AGE[i]; LIN[w] = LIN[i]; SPE[w] = SPE[i]; EN[w] = EN[i];
+      X[w] = X[i]; Y[w] = Y[i]; AGE[w] = AGE[i]; LIN[w] = LIN[i]; SPE[w] = SPE[i]; EN[w] = EN[i]; HD[w] = HD[i];
       const ws = w * G, bs = i * G;
       for (let g = 0; g < G; g++) GEN[ws + g] = GEN[bs + g];
     }
@@ -664,7 +698,7 @@ export function step(state, P) {
   const childE = eOn ? birthCost : state.energy0;
   for (let b = 0; b < bc; b++) {
     if (w >= state.cap) break;
-    X[w] = bx[b]; Y[w] = by[b]; AGE[w] = 0; LIN[w] = bl[b]; SPE[w] = bspecies[b]; EN[w] = childE;
+    X[w] = bx[b]; Y[w] = by[b]; AGE[w] = 0; LIN[w] = bl[b]; SPE[w] = bspecies[b]; EN[w] = childE; HD[w] = s.bh[b];
     const ws = w * G, bsrc = b * G;
     for (let g = 0; g < G; g++) GEN[ws + g] = bg[bsrc + g];
     w++;
