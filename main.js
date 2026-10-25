@@ -503,6 +503,7 @@ function drawSparks(s) {
 
 // ---- init / presets -------------------------------------------------------
 function applyInit() {
+  errorShown = '';   // a fresh run may show the same error again
   resetState(state, init.seed | 0);
   state.energy0 = P.energyMax * 0.5;
   P.fieldSeed = pinnedFieldSeed != null ? pinnedFieldSeed : freshFieldSeed();   // a new flora pattern each reset
@@ -904,7 +905,17 @@ function singleStep() { step(state, P); updatePeaks(state, makeSpeciesHasher(sta
 
 let fpsT = 0, fpsN = 0, fps = 0;
 let ticksPerFrame = 0;
+// A frame that throws would otherwise stop the animation loop silently (a frozen
+// picture), so frame() runs its body in a try and keeps scheduling itself: an error
+// pauses the run and shows a banner with copyable details instead.
 function frame(t) {
+  try { frameBody(t); } catch (err) {
+    reportError(err);
+    try { renderFn(state, P, view, ui); } catch (e) { /* keep the last picture if drawing itself fails */ }
+  }
+  requestAnimationFrame(frame);
+}
+function frameBody(t) {
   const hasher = makeSpeciesHasher(state, P.R);
   updatePeaks(state, hasher);   // counts seeded and painted cells too, not just births
   if (ui.playing) {
@@ -921,7 +932,6 @@ function frame(t) {
   const troph = P.energyOn ? ` · plants <b>${s.plants}</b> · animals <b>${s.animals}</b> · e̅ <b>${s.meanEnergy.toFixed(1)}</b>` : '';
   $('#starthint').style.display = !ui.playing && state.tick === 0 ? 'block' : 'none';
   $('#hud').innerHTML = `tick <b>${state.tick}</b> · pop <b>${state.count}</b> · lineages <b>${s.lineages}</b> · genera <b>${s.genera}</b>${troph} · ${fps} fps · ${rendererName}${ui.playing ? (ui.speed > 1 ? ` · <b>${ticksPerFrame}</b> ticks/frame` : '') : ' · <b>paused</b>'}`;
-  requestAnimationFrame(frame);
 }
 
 window.addEventListener('keydown', (e) => {
@@ -965,6 +975,37 @@ function setupTips() {
     } else if (cur !== null) { cur = null; tip.style.display = 'none'; }
   });
 }
+
+// ---- error banner ---------------------------------------------------------
+// Any uncaught error (in the frame loop, an event handler or at boot) pauses the run and
+// shows what went wrong, with the details ready to copy into a bug report.
+let errorShown = '';
+function errorDetails(err) {
+  const e = err && err.stack ? err : new Error(String(err && err.message || err));
+  const stack = String(e.stack || '').split('\n').slice(0, 8).join('\n');
+  const where = `tick ${state.tick} · pop ${state.count} · preset ${curPreset >= 0 ? PRESET_NAMES[curPreset] : 'custom'} · speed ${ui.speed === Infinity ? 'max' : ui.speed + '×'} · colour ${ui.colorMode} · ${typeof rendererName === 'string' ? rendererName : '?'}`;
+  return `${e.message}\n${stack.startsWith(e.name) ? stack.split('\n').slice(1).join('\n') : stack}\n\n${where}\n${navigator.userAgent}`;
+}
+function reportError(err) {
+  ui.playing = false;
+  try { syncPlayButtons(); } catch (e) { /* the banner matters more */ }
+  const details = errorDetails(err);
+  if (details === errorShown) return;   // the same error again (e.g. every frame): already showing
+  errorShown = details;
+  const box = $('#errorbar');
+  box.querySelector('pre').textContent = details;
+  box.style.display = 'block';
+  console.error(err);
+}
+window.addEventListener('error', (e) => reportError(e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => reportError(e.reason));
+$('#errorcopy').addEventListener('click', (e) => {
+  const btn = e.currentTarget, text = errorShown;
+  const done = () => { btn.textContent = '✓ copied'; setTimeout(() => { btn.textContent = 'copy details'; }, 1400); };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, () => window.prompt('Copy these details:', text));
+  else window.prompt('Copy these details:', text);
+});
+$('#errorclose').addEventListener('click', () => { $('#errorbar').style.display = 'none'; });   // stays quiet for this error until a reset
 
 // ---- first-visit guide ----------------------------------------------------
 // Shown once per browser (remembered in localStorage when available); the ? button
