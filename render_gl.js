@@ -4,8 +4,8 @@
 // (same HSL functions), so the two renderers are pixel-siblings. Kept behind the same
 // draw() seam; main.js falls back to Canvas2D if WebGL2 is unavailable.
 
-import { G, GENE, geneRanges } from './sim.js';
-import { phenotypeHSL, speciesHSL, trophicHSL, hslToRgb, makeFlora, sampleField, computePairs } from './render.js';
+import { G, GENE, geneRanges, bodyRadius } from './sim.js';
+import { phenotypeHSL, speciesHSL, trophicHSL, hslToRgb, makeFlora, sampleField, computePairs, speciesSides, cellRotation } from './render.js';
 
 const GROUND = [0x12 / 255, 0x10 / 255, 0x0e / 255];
 
@@ -15,28 +15,42 @@ precision highp float;
 layout(location=0) in vec2 a_pos;
 layout(location=1) in vec4 a_color;
 layout(location=2) in float a_size;
+layout(location=3) in vec2 a_shape;   // (polygon sides, 0 = circle; rotation in radians)
 uniform vec2 u_res; uniform vec2 u_off; uniform float u_scale;
 out vec4 v_color;
+out vec2 v_shape;
+out float v_size;
 void main() {
   vec2 s = a_pos * u_scale + u_off;
   vec2 clip = (s / u_res) * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
   gl_PointSize = a_size;
   v_color = a_color;
+  v_shape = a_shape;
+  v_size = a_size;
 }`;
 
 const FRAG = `#version 300 es
 precision highp float;
-in vec4 v_color; out vec4 o;
-uniform float u_round;   // 1 = round point sprite, 0 = line/plain
-uniform float u_ring;    // 1 = draw a ring instead of a filled disc
+in vec4 v_color; in vec2 v_shape; in float v_size; out vec4 o;
+uniform float u_round;   // 1 = shaped point sprite, 0 = line/plain
+uniform float u_ring;    // 1 = draw a ring instead of a filled shape
+uniform float u_pad;     // 1 = the sprite includes a 2px anti-aliasing rim around the shape
 void main() {
   vec4 col = v_color;
   if (u_round > 0.5) {
-    float d = length(gl_PointCoord - 0.5);
-    float aa = fwidth(d) + 0.001;
-    float a = 1.0 - smoothstep(0.5 - aa, 0.5 + aa, d);
-    if (u_ring > 0.5) a *= smoothstep(0.34 - aa, 0.34 + aa, d);
+    // p in units of the shape's circumradius (1 = body edge)
+    float pad = u_pad > 0.5 ? 2.0 / v_size : 0.0;
+    vec2 p = (gl_PointCoord - 0.5) * 2.0 / (1.0 - pad);
+    float d = length(p);
+    if (v_shape.x > 2.5) {               // regular polygon: distance along the nearest apothem / the apothem
+      float n = v_shape.x, sec = 6.2831853 / n;
+      float a = atan(p.y, p.x) - v_shape.y;
+      d = cos(floor(0.5 + a / sec) * sec - a) * d / cos(3.14159265 / n);
+    }
+    float aa = fwidth(d) + 0.002;
+    float a = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, d);
+    if (u_ring > 0.5) a *= smoothstep(0.68 - aa, 0.68 + aa, d);
     if (a <= 0.0) discard;
     col.a *= a;
   }
@@ -62,34 +76,40 @@ export function createGLRenderer(canvas) {
   const u = {
     res: gl.getUniformLocation(prog, 'u_res'), off: gl.getUniformLocation(prog, 'u_off'),
     scale: gl.getUniformLocation(prog, 'u_scale'), round: gl.getUniformLocation(prog, 'u_round'),
-    ring: gl.getUniformLocation(prog, 'u_ring'),
+    ring: gl.getUniformLocation(prog, 'u_ring'), pad: gl.getUniformLocation(prog, 'u_pad'),
   };
-  const A_POS = 0, A_COLOR = 1, A_SIZE = 2;
+  const A_POS = 0, A_COLOR = 1, A_SIZE = 2, A_SHAPE = 3;
   const vao = gl.createVertexArray();
-  const posB = gl.createBuffer(), colB = gl.createBuffer(), sizeB = gl.createBuffer();
+  const posB = gl.createBuffer(), colB = gl.createBuffer(), sizeB = gl.createBuffer(), shapeB = gl.createBuffer();
   gl.bindVertexArray(vao);
   gl.bindBuffer(gl.ARRAY_BUFFER, posB); gl.enableVertexAttribArray(A_POS); gl.vertexAttribPointer(A_POS, 2, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, colB); gl.enableVertexAttribArray(A_COLOR); gl.vertexAttribPointer(A_COLOR, 4, gl.UNSIGNED_BYTE, true, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, sizeB); gl.vertexAttribPointer(A_SIZE, 1, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, shapeB); gl.vertexAttribPointer(A_SHAPE, 2, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
 
   // CPU staging (grown as needed) — filled per category, then uploaded and drawn.
-  let sPos = new Float32Array(0), sCol = new Uint8Array(0), sSize = new Float32Array(0), sCap = 0;
+  let sPos = new Float32Array(0), sCol = new Uint8Array(0), sSize = new Float32Array(0), sShape = new Float32Array(0), sCap = 0;
   function grow(n) {
     if (n <= sCap) return;
     sCap = Math.max(n, sCap * 2, 8192);
-    sPos = new Float32Array(sCap * 2); sCol = new Uint8Array(sCap * 4); sSize = new Float32Array(sCap);
+    sPos = new Float32Array(sCap * 2); sCol = new Uint8Array(sCap * 4); sSize = new Float32Array(sCap); sShape = new Float32Array(sCap * 2);
     gl.bindBuffer(gl.ARRAY_BUFFER, posB); gl.bufferData(gl.ARRAY_BUFFER, sPos.byteLength, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, colB); gl.bufferData(gl.ARRAY_BUFFER, sCol.byteLength, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, sizeB); gl.bufferData(gl.ARRAY_BUFFER, sSize.byteLength, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, shapeB); gl.bufferData(gl.ARRAY_BUFFER, sShape.byteLength, gl.DYNAMIC_DRAW);
   }
-  function flush(mode, m, round, ring, sizeArray, sizeConst) {
+  // shapeArray: per-vertex (sides, rotation) from sShape; otherwise every sprite is a circle.
+  // pad: 1 when the sprite carries a 2px anti-aliasing rim around the shape (cells).
+  function flush(mode, m, round, ring, sizeArray, sizeConst, shapeArray, pad) {
     if (m <= 0) return;
     gl.bindBuffer(gl.ARRAY_BUFFER, posB); gl.bufferSubData(gl.ARRAY_BUFFER, 0, sPos, 0, m * 2);
     gl.bindBuffer(gl.ARRAY_BUFFER, colB); gl.bufferSubData(gl.ARRAY_BUFFER, 0, sCol, 0, m * 4);
-    gl.uniform1f(u.round, round); gl.uniform1f(u.ring, ring);
+    gl.uniform1f(u.round, round); gl.uniform1f(u.ring, ring); gl.uniform1f(u.pad, pad || 0);
     if (sizeArray) { gl.enableVertexAttribArray(A_SIZE); gl.bindBuffer(gl.ARRAY_BUFFER, sizeB); gl.bufferSubData(gl.ARRAY_BUFFER, 0, sSize, 0, m); }
     else { gl.disableVertexAttribArray(A_SIZE); gl.vertexAttrib1f(A_SIZE, sizeConst); }
+    if (shapeArray) { gl.enableVertexAttribArray(A_SHAPE); gl.bindBuffer(gl.ARRAY_BUFFER, shapeB); gl.bufferSubData(gl.ARRAY_BUFFER, 0, sShape, 0, m * 2); }
+    else { gl.disableVertexAttribArray(A_SHAPE); gl.vertexAttrib2f(A_SHAPE, 0, 0); }
     gl.drawArrays(mode, 0, m);
   }
 
@@ -98,8 +118,6 @@ export function createGLRenderer(canvas) {
 
   // cached flora, keyed on habitat size + field seed
   let floraArr = null, floraN = 0, floraKey = '';
-
-  const CELL_SIZE = 5.0;       // diameter in px (matches the Canvas2D arc radius 2.5)
 
   function draw(state, P, view, opts) {
     const cw = canvas.width, ch = canvas.height;
@@ -135,12 +153,17 @@ export function createGLRenderer(canvas) {
     // 2. adjacency lines
     if (opts.showLines && N > 1) drawGlLines(state, P, opts, X, Y, Wx, Wy, halfWx, halfWy);
 
-    // 3. cells (on top of the field/lines)
+    // 3. cells (on top of the field/lines): body-sized sprites, shaped in the shader.
+    //    Each sprite is the body diameter plus a 2px anti-aliasing rim.
+    const shapes = opts.shapes !== false;
     for (let i = 0; i < N; i++) {
+      const base = i * G, d = 2 * bodyRadius(GEN, base, R) * px;
       sPos[i * 2] = X[i]; sPos[i * 2 + 1] = Y[i];
       sCol[i * 4] = cellCol[i * 4]; sCol[i * 4 + 1] = cellCol[i * 4 + 1]; sCol[i * 4 + 2] = cellCol[i * 4 + 2]; sCol[i * 4 + 3] = 255;
+      sSize[i] = d + 2;
+      sShape[i * 2] = shapes ? speciesSides(state, state.species[i]) : 0; sShape[i * 2 + 1] = cellRotation(GEN, base, R);
     }
-    flush(gl.POINTS, N, 1, 0, false, CELL_SIZE * px);
+    flush(gl.POINTS, N, 1, 0, true, 0, true, 1);
 
     // 4. hover overlay
     const h = opts.hovered;
@@ -209,7 +232,7 @@ export function createGLRenderer(canvas) {
     }
     flush(gl.LINES, m, 0, 0, false, 1);
     // amber ring on the hovered cell
-    sPos[0] = X[h]; sPos[1] = Y[h]; setCol(0, 201, 135, 58, 255); sSize[0] = 13 * px;
+    sPos[0] = X[h]; sPos[1] = Y[h]; setCol(0, 201, 135, 58, 255); sSize[0] = (2 * bodyRadius(GEN, h * G, R) + 8) * px;
     flush(gl.POINTS, 1, 1, 1, true, 0);
   }
 

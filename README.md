@@ -31,8 +31,8 @@ Starts paused. **Space** play · **.** step · **R** reset · **H** hide the UI 
   cap, and (in phenotype colour) everything turns grey.
 - **Genealogy colour** (the default): each founder lineage is a hue family, and each
   species split steps the shade, so the family tree is visible on the habitat.
-- **Species bloom**: one founder under fast mutation and choosy mating splits into a
-  dozen-plus large species.
+- **Species bloom**: one founder under fast mutation and choosy mating splits into
+  around ten large species.
 - **Trophic web**: switch on the energy model and one lineage grazing the flora
   field evolves predators that hunt it: an emergent food chain (green plants → red
   animals).
@@ -48,6 +48,12 @@ Without that trade-off, every run converges on immortal grey generalists. Specie
 divergence clusters: each species' reference genome follows its members, and an
 offspring that strays past the threshold founds a new one.
 
+Cells have **solid bodies** (toggle: Rules → bodies). Body size reads the reproductive
+strategy (long reach and low fertility make a big body), and no two bodies overlap: an
+offspring that can't find free space isn't born, and a blocked move waits. Each cell is
+drawn at its body size; its **shape** is a species trait read from sociability, from a
+triangle (shuns crowds) through square, pentagon and hexagon to a circle (seeks them).
+
 ## Controls
 
 Each panel section is badged for when it applies: **live** (global rules — affect
@@ -58,6 +64,7 @@ tap/drag paints; blobs, erasing and genome readouts need a mouse and keyboard.
 
 ## Structure
 
+- `seed.js` — DOM-free seeding of a reset (shared by the app and tests).
 - `sim.js` — DOM-free simulation core (typed-array state, seeded PRNG, `step()`);
   written to port to Rust.
 - `prng.js` — seeded mulberry32; a seed plus parameters reproduces a run exactly.

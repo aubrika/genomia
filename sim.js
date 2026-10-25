@@ -37,7 +37,8 @@ export function geneRanges(R) {
 export const DEFAULTS = {
   world: 1000, R: 17, sigma: 0.6,
   costsOn: true, kMove: 0.4, kSense: 0.3, kTol: 0.5, kTaxis: 0.2,
-  kTolDeath: 0.03,        // generalist mortality: per-tick death chance added at a full-width survival window (costs on, energy off)
+  kTolDeath: 0.055,       // generalist mortality: per-tick death chance added at a full-width survival window (costs on, energy off)
+  bodiesOn: true,         // cells have solid bodies: births and moves can't overlap another cell's body
   recomb: 'crossover', mutation: 'gaussian', mu: 0.1, sigmaG: 0.05, kappa: 0.15,
   macroRate: 0.05,        // fraction of mutations that are outsized "knockouts" (re-roll the whole gene) rather than small nudges
 
@@ -115,9 +116,50 @@ export function foundClade(state, genome, off, lineageId) {
   return foundSpecies(state, genome, off, lineageId, -1, g, true);
 }
 
+// Body size — a readout of the reproductive strategy: long reach and low fertility make
+// a big body (few, large, slow breeders), short reach and high fertility a small one.
+// Radius is in units of R (so it scales with the window like every other length):
+// 0.09R–0.21R. With bodies on it is physical (cells can't overlap); the renderers draw
+// each cell at exactly this radius.
+export const BODY_MIN = 0.09, BODY_SPAN = 0.12;
+export function bodyRadius(genome, base, R) {
+  let reach = genome[base + GENE.rScale] - 0.5;            // rScale range [0.5, 1.5] -> [0, 1]
+  let fert = genome[base + GENE.fecundity] / 0.3;           // fecundity range [0, 0.3] -> [0, 1]
+  if (reach < 0) reach = 0; else if (reach > 1) reach = 1;
+  if (fert < 0) fert = 0; else if (fert > 1) fert = 1;
+  return R * (BODY_MIN + BODY_SPAN * (0.5 * reach + 0.5 * (1 - fert)));
+}
+
+// Occupancy grid for placing cells outside the step loop (seeding, painting): a sparse
+// bucket map of bodies, so "is this spot free?" checks only nearby cells.
+export function createOccupancy(state, P) {
+  const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
+  const c = P.R * 0.5, nx = Math.max(1, Math.ceil(Wx / c)), ny = Math.max(1, Math.ceil(Wy / c));
+  const buckets = new Map(), halfWx = Wx / 2, halfWy = Wy / 2;
+  const key = (x, y) => (Math.min(ny - 1, Math.max(0, (y / c) | 0))) * nx + Math.min(nx - 1, Math.max(0, (x / c) | 0));
+  const add = (x, y, r) => { const k = key(x, y); let b = buckets.get(k); if (!b) buckets.set(k, b = []); b.push(x, y, r); };
+  for (let i = 0; i < state.count; i++) add(state.x[i], state.y[i], bodyRadius(state.genome, i * G, P.R));
+  const fits = (x, y, r) => {
+    if (!P.bodiesOn) return true;
+    const bx = (x / c) | 0, by = (y / c) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const b = buckets.get(((by + dy + ny) % ny) * nx + ((bx + dx + nx) % nx)); if (!b) continue;
+      for (let k = 0; k < b.length; k += 3) {
+        let ddx = b[k] - x, ddy = b[k + 1] - y;
+        if (ddx > halfWx) ddx -= Wx; else if (ddx < -halfWx) ddx += Wx;
+        if (ddy > halfWy) ddy -= Wy; else if (ddy < -halfWy) ddy += Wy;
+        const rr = r + b[k + 2]; if (ddx * ddx + ddy * ddy < rr * rr) return false;
+      }
+    }
+    return true;
+  };
+  return { fits, add };
+}
+
 // Reference tracking rates: how far a species' / genus' reference genome moves toward
 // each offspring that stays in it. Large clades effectively track their mean genome.
 const SPECIES_TRACK = 0.01, GENUS_TRACK = 0.002;
+const BIRTH_TRIES = 4;   // landing directions an offspring tries before the birth fails (bodies on)
 function track(ref, genome, off, rate) {
   for (let g = 0; g < G; g++) ref[g] += rate * (genome[off + g] - ref[g]);
 }
@@ -257,7 +299,8 @@ function ensureScratch(state) {
       bx: new Float32Array(cap), by: new Float32Array(cap), bl: new Int32Array(cap), bspecies: new Int32Array(cap),
       bg: new Float32Array(cap * G),
       dE: new Float32Array(cap), ae: new Float32Array(cap), pe: new Float32Array(cap), // energy: net feed delta, autotroph & predator efficiencies
-      counts: null, cursor: null,
+      br: new Float32Array(cap), bR: new Float32Array(cap), nbNext: new Int32Array(cap), // body radii (cells, newborns); newborn bucket chains
+      counts: null, cursor: null, nbHead: null,
     };
   }
   return s;
@@ -469,6 +512,54 @@ export function step(state, P) {
     survive[i] = alive ? 1 : 0;
   }
 
+  // Solid bodies: radius per cell, and an overlap test against surviving cells (at their
+  // current positions — tick-start for births, already-moved for movement) and this
+  // tick's newborns (chained per bucket). Collisions use their own finer grid (bucket
+  // 0.75R, indexed at tick start): a 3x3 search reaches 0.75R, which covers two bodies
+  // (≤0.42R) plus any move made this tick (≤0.3R).
+  const bodies = !!P.bodiesOn, br = s.br, bR = s.bR, nbNext = s.nbNext;
+  const fb = R * 0.75;
+  const fnx = Math.max(1, Math.ceil(Wx / fb)), fny = Math.max(1, Math.ceil(Wy / fb)), fnc = fnx * fny;
+  let nbHead = s.nbHead, fCounts = s.fCounts, fItems = s.fItems;
+  const bucketOf = (x, y) => {
+    let cx = (x / fb) | 0; if (cx >= fnx) cx = fnx - 1; else if (cx < 0) cx = 0;
+    let cy = (y / fb) | 0; if (cy >= fny) cy = fny - 1; else if (cy < 0) cy = 0;
+    return cy * fnx + cx;
+  };
+  if (bodies) {
+    if (!nbHead || nbHead.length < fnc) { nbHead = s.nbHead = new Int32Array(fnc); fCounts = s.fCounts = new Int32Array(fnc + 1); }
+    if (!fItems) fItems = s.fItems = new Int32Array(state.cap);
+    nbHead.fill(-1, 0, fnc); fCounts.fill(0, 0, fnc + 1);
+    for (let i = 0; i < N; i++) { br[i] = bodyRadius(GEN, i * G, R); fCounts[bucketOf(X[i], Y[i]) + 1]++; }
+    for (let c = 0; c < fnc; c++) fCounts[c + 1] += fCounts[c];
+    for (let c = 0; c < fnc; c++) nbHead[c] = fCounts[c];   // temporary fill cursor
+    for (let i = 0; i < N; i++) fItems[nbHead[bucketOf(X[i], Y[i])]++] = i;
+    nbHead.fill(-1, 0, fnc);
+  }
+  const fits = (x, y, r, self) => {
+    const c0 = bucketOf(x, y), cx = c0 % fnx, cy = (c0 / fnx) | 0;
+    for (let ddy = -1; ddy <= 1; ddy++) {
+      const cyy = ((cy + ddy) % fny + fny) % fny;
+      for (let ddx = -1; ddx <= 1; ddx++) {
+        const c = cyy * fnx + ((cx + ddx) % fnx + fnx) % fnx;
+        for (let p = fCounts[c]; p < fCounts[c + 1]; p++) {
+          const j = fItems[p]; if (j === self || !survive[j]) continue;
+          let dx = X[j] - x, dy = Y[j] - y;
+          if (dx > halfWx) dx -= Wx; else if (dx < -halfWx) dx += Wx;
+          if (dy > halfWy) dy -= Wy; else if (dy < -halfWy) dy += Wy;
+          const rr2 = r + br[j]; if (dx * dx + dy * dy < rr2 * rr2) return false;
+        }
+        for (let b = nbHead[c]; b >= 0; b = nbNext[b]) {
+          let dx = bx[b] - x, dy = by[b] - y;
+          if (dx > halfWx) dx -= Wx; else if (dx < -halfWx) dx += Wx;
+          if (dy > halfWy) dy -= Wy; else if (dy < -halfWy) dy += Wy;
+          const rr2 = r + bR[b]; if (dx * dx + dy * dy < rr2 * rr2) return false;
+        }
+      }
+    }
+    return true;
+  };
+
   // 4. Birth — survivors inside the (soft) birth band emit one offspring at f_eff.
   let bc = 0;
   const bx = s.bx, by = s.by, bg = s.bg, bl = s.bl, bspecies = s.bspecies;
@@ -493,13 +584,23 @@ export function step(state, P) {
     if (rng.next() >= feff * win) continue;
     if (eOn && EN[i] < birthThreshold) continue;          // not enough banked energy to reproduce
     if (state.count + bc >= popCap) continue; // reject births at the (soft or buffer) cap
-    if (eOn) EN[i] -= birthCost;                           // parent invests energy into the child
     buildOffspring(state, i, rng, P, rr, bg, bc * G, counts, items, cellIdx, nx, ny, Wx, Wy);
-    const ang = rng.next() * 6.283185307179586;
+    // Landing spot: a random direction at the seed-throw distance. With bodies on, a
+    // spot that overlaps another body is rejected; up to BIRTH_TRIES directions are
+    // tried, and if all are taken the birth fails (and costs nothing).
     const dd = GEN[base + GENE.dDisp], cv = GEN[base + GENE.dCV];
     const dist = Math.abs(dd + dd * cv * rng.gauss());
-    bx[bc] = wrap(X[i] + Math.cos(ang) * dist, Wx);
-    by[bc] = wrap(Y[i] + Math.sin(ang) * dist, Wy);
+    const cr = bodies ? bodyRadius(bg, bc * G, R) : 0;
+    let px = 0, py = 0, placed = false;
+    for (let tr = 0; tr < (bodies ? BIRTH_TRIES : 1); tr++) {
+      const ang = rng.next() * 6.283185307179586;
+      px = wrap(X[i] + Math.cos(ang) * dist, Wx); py = wrap(Y[i] + Math.sin(ang) * dist, Wy);
+      if (!bodies || fits(px, py, cr, -1)) { placed = true; break; }
+    }
+    if (!placed) continue;
+    if (eOn) EN[i] -= birthCost;                           // parent invests energy into the child
+    bx[bc] = px; by[bc] = py;
+    if (bodies) { bR[bc] = cr; const c = bucketOf(px, py); nbNext[bc] = nbHead[c]; nbHead[c] = bc; }
     bl[bc] = LIN[i];                       // lineage (founder) is inherited unchanged
     // Divergence taxonomy, coarse first: past the genus threshold => new genus (and a
     // new species inside it, marked as a big colour step); else past the species
@@ -534,7 +635,8 @@ export function step(state, P) {
     let dy = (1 - at) * ryu + tx * gy[i];
     const dl = Math.hypot(dx, dy);
     if (dl > 1e-9) { dx /= dl; dy /= dl; } else { dx = rxu; dy = ryu; }
-    X[i] = wrap(X[i] + dx * st, Wx); Y[i] = wrap(Y[i] + dy * st, Wy);
+    const mx = wrap(X[i] + dx * st, Wx), my = wrap(Y[i] + dy * st, Wy);
+    if (!bodies || fits(mx, my, br[i], i)) { X[i] = mx; Y[i] = my; }   // blocked => stay put this tick
     AGE[i] += 1;
   }
 

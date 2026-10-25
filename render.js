@@ -2,7 +2,7 @@
 // semantic (similar genomes look similar); adjacency lines show that "touching"
 // in continuous space is a continuous quantity. Kept separate from sim.js.
 
-import { G, GENE, geneRanges } from './sim.js';
+import { G, GENE, geneRanges, bodyRadius } from './sim.js';
 import { makeRNG } from './prng.js';
 
 // --- color -----------------------------------------------------------------
@@ -70,6 +70,25 @@ export function trophicHSL(genome, base, en, emax) {
   if (emax > 0) { let f = en / emax; if (f < 0) f = 0; else if (f > 1) f = 1; light = 30 + 42 * f; }
   return [hue, 68, light];
 }
+
+// Shape. Size is the cell's body (sim.js bodyRadius: reach and fertility). The polygon
+// is a per-SPECIES trait read from the species' reference genome — sociability, from a
+// sharp triangle (shuns crowds) through square, pentagon and hexagon to a circle (seeks
+// crowds) — so each species keeps one consistent shape. Rotation is per cell, from its
+// own genome, so a colony doesn't look stamped. 0 sides = circle.
+export const SHAPE_SIDES = [3, 4, 5, 6, 0];
+export function speciesSides(state, sp) {
+  const ref = state.spRef[sp];
+  if (!ref) return 0;
+  const k = Math.floor((ref[GENE.taxis] + 1) / 2 * SHAPE_SIDES.length);
+  return SHAPE_SIDES[k < 0 ? 0 : k >= SHAPE_SIDES.length ? SHAPE_SIDES.length - 1 : k];
+}
+export function cellRotation(genome, base, R) {
+  let v = genome[base + GENE.dCV] * 7.31 + genome[base + GENE.dDisp] / R * 3.07 + genome[base + GENE.fecundity] * 17.3;
+  v -= Math.floor(v);
+  return v * 6.283185307179586;
+}
+export const SHAPE_NAMES = { 3: 'triangle', 4: 'square', 5: 'pentagon', 6: 'hexagon', 0: 'circle' };
 
 export function hslToRgb(h, s, l) {
   h /= 360; s /= 100; l /= 100;
@@ -206,12 +225,18 @@ export function draw(ctx, state, P, view, opts) {
 
   if (opts.showLines && N > 1) drawLines(ctx, state, P, view, opts);
 
-  // cells: filled circles, 2.5px, no stroke
-  const X = state.x, Y = state.y;
+  // cells: filled polygons / circles at body size, no stroke
+  const X = state.x, Y = state.y, shapes = opts.shapes !== false;
   for (let i = 0; i < N; i++) {
+    const base = i * G, r = bodyRadius(GEN, base, R), sides = shapes ? speciesSides(state, state.species[i]) : 0;
     ctx.fillStyle = `rgb(${rB[i]},${gB[i]},${bB[i]})`;
     ctx.beginPath();
-    ctx.arc(X[i], Y[i], 2.5, 0, 6.283185307179586);
+    if (sides === 0) ctx.arc(X[i], Y[i], r, 0, 6.283185307179586);
+    else {
+      const rot = cellRotation(GEN, base, R), step = 6.283185307179586 / sides;
+      for (let k = 0; k < sides; k++) { const a = rot + k * step; k ? ctx.lineTo(X[i] + r * Math.cos(a), Y[i] + r * Math.sin(a)) : ctx.moveTo(X[i] + r * Math.cos(a), Y[i] + r * Math.sin(a)); }
+      ctx.closePath();
+    }
     ctx.fill();
   }
 
@@ -329,6 +354,6 @@ function drawHover(ctx, state, P, view, h) {
   ctx.strokeStyle = '#C9873A';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.arc(X[h], Y[h], 5.5, 0, 6.283185307179586);
+  ctx.arc(X[h], Y[h], bodyRadius(GEN, h * G, R) + 3, 0, 6.283185307179586);
   ctx.stroke();
 }
