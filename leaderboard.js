@@ -1,3 +1,5 @@
+import { hashBaseHSL, hslToRgb } from './render.js';
+
 // Species leaderboard — DOM-free. Ranks distinct genomes, i.e. species hashes (see
 // render.js makeSpeciesHasher): related species whose founding genomes land in the same
 // hash bins share a look and a name, so they are counted together as one entry. Each
@@ -45,32 +47,57 @@ export function topSpecies(state, k, hash) {
   return top.map((t) => { const e = nowBy.get(t.hash); return Object.assign({}, t, { now: e ? e.n : 0, species: shared.get(t.hash) || 0 }); });
 }
 
-// Silly names: an adjective and an animal, both picked from the species hash (re-mixed,
-// so the name doesn't move in step with the hue). Same hash, same name.
-const ADJECTIVES = [
-  'hairy', 'deciduous', 'sleepy', 'wobbly', 'grumpy', 'sparkly', 'damp', 'fuzzy',
-  'bashful', 'crunchy', 'velvet', 'nervous', 'majestic', 'soggy', 'tiny', 'dapper',
-  'feral', 'gelatinous', 'polite', 'lumpy', 'glossy', 'ornery', 'jaunty', 'moody',
-  'peculiar', 'rubbery', 'spiky', 'squishy', 'stately', 'thrifty', 'zesty', 'clumsy',
-  'cosmic', 'curious', 'dizzy', 'elastic', 'fancy', 'fluffy', 'frilly', 'gallant',
-  'giddy', 'hungry', 'itchy', 'jolly', 'lanky', 'mossy', 'nimble', 'pensive',
-  'plucky', 'prickly', 'quirky', 'rowdy', 'rusty', 'salty', 'scruffy', 'smug',
-  'speckled', 'stubborn', 'sneaky', 'woolly', 'nocturnal', 'carbonated', 'migratory', 'suspicious',
-  'theatrical', 'unflappable', 'bewildered', 'cantankerous', 'bioluminescent', 'chonky', 'philosophical', 'sticky',
+// Species names: a colour word for the species' base hash colour plus an invented
+// creature name, both from the species hash, so the same hash always gets the same name.
+// The colour word is the named colour nearest (in CIELAB) to the colour the species is
+// drawn in species-hash mode. The creatures came from a small character-level model
+// trained on real animal names, filtered against real words and anything offensive, and
+// reviewed by hand.
+const COLOURS = [
+  ['scarlet', 0xE0402F], ['vermilion', 0xE35A2B], ['tangerine', 0xEB7A2E], ['amber', 0xE39A2C],
+  ['marigold', 0xE3B12E], ['saffron', 0xE8C437], ['citron', 0xC9C93A], ['chartreuse', 0xA3CC3A],
+  ['lime', 0x7BCB3F], ['clover', 0x4FBF4A], ['emerald', 0x38B865], ['jade', 0x35B585],
+  ['seafoam', 0x3DC4A2], ['turquoise', 0x33BFC4], ['cyan', 0x38B2D6], ['cerulean', 0x3A9DDB],
+  ['azure', 0x3D86E0], ['cornflower', 0x5A7BE0], ['cobalt', 0x4363D9], ['indigo', 0x5A4FD6],
+  ['violet', 0x7A4FD6], ['amethyst', 0x9A50D4], ['orchid', 0xB754CF], ['magenta', 0xD04FC6],
+  ['fuchsia', 0xD9479F], ['cerise', 0xDB4380], ['raspberry', 0xD8435F], ['crimson', 0xD63A45],
 ];
-const ANIMALS = [
-  'gibbon', 'fish', 'wombat', 'axolotl', 'capybara', 'newt', 'lemur', 'tapir',
-  'platypus', 'pangolin', 'narwhal', 'otter', 'badger', 'heron', 'puffin', 'walrus',
-  'yak', 'ferret', 'gecko', 'mole', 'shrew', 'quokka', 'okapi', 'aardvark',
-  'armadillo', 'beaver', 'bison', 'camel', 'cuttlefish', 'dormouse', 'eel', 'emu',
-  'flamingo', 'goose', 'hedgehog', 'ibis', 'jellyfish', 'kiwi', 'koala', 'llama',
-  'lobster', 'manatee', 'marmot', 'mongoose', 'moose', 'octopus', 'ostrich', 'owl',
-  'pelican', 'penguin', 'possum', 'raccoon', 'salamander', 'seahorse', 'sloth', 'snail',
-  'squid', 'stoat', 'tortoise', 'toucan', 'vole', 'weasel', 'zebra', 'anchovy',
-  'blobfish', 'tardigrade', 'sea cucumber', 'mudskipper', 'wallaby', 'hamster', 'bat', 'crab',
+const CREATURES = [
+  'jat', 'lebra', 'squib', 'bexo', 'civo', 'civy', 'clep', 'clyn', 'crid', 'dral', 'fral',
+  'frel', 'garg', 'gorn', 'hyel', 'juko', 'kraw', 'loby', 'lorp', 'meep', 'nivy', 'ploo',
+  'pyty', 'wano', 'yfin', 'zela', 'fala', 'frid', 'clig', 'garm', 'gopo', 'imba', 'selo',
+  'tarm', 'vuid', 'ysna', 'axibo', 'axine', 'axora', 'axovet', 'babbou', 'babug', 'baryx',
+  'batig', 'beaca', 'bexig', 'bexoat', 'bobret', 'bonfin', 'bugoa', 'buzalo', 'buzark',
+  'buzill', 'caryx', 'capork', 'capink', 'catape', 'cawnar', 'civala', 'civorm', 'civuff',
+  'clabug', 'coada', 'cobong', 'cocong', 'codovy', 'conkat', 'coriaw', 'croby', 'cuppel',
+  'derou', 'dincoo', 'drala', 'drimar', 'dugall', 'dunkal', 'egorm', 'elkaby', 'emulla',
+  'erowl', 'falrew', 'firawk', 'fisolo', 'flynat', 'flynow', 'galcat', 'garaw', 'gargoo',
+  'gazale', 'grony', 'heark', 'hinew', 'hyaril', 'hyog', 'hytur', 'ibeel', 'ibink', 'igall',
+  'igauke', 'jacork', 'jagoo', 'jagly', 'julla', 'juzal', 'kabbou', 'kajer', 'kandog', 'kapear',
+  'kapy', 'kesumb', 'ketang', 'kincoo', 'kinoby', 'kiwom', 'knarp', 'koato', 'koobo', 'krabug',
+  'kricat', 'kunleo', 'langon', 'larpon', 'lobreo', 'malear', 'melow', 'ninco', 'ocemu',
+  'panak', 'polfin', 'quesal', 'raflyn', 'tapyt', 'towlin', 'vula', 'walabu', 'weagoa',
+  'whawna', 'wiguid', 'wolpan', 'womoss', 'wompe', 'womur', 'wooboa', 'woono', 'wraig', 'wrilda',
 ];
+function rgbToLab(r, g, b) {
+  const lin = (c) => { c /= 255; return c > 0.04045 ? ((c + 0.055) / 1.055) ** 2.4 : c / 12.92; };
+  r = lin(r); g = lin(g); b = lin(b);
+  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  const x = f((0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047), y = f(0.2126 * r + 0.7152 * g + 0.0722 * b), z = f((0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883);
+  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+}
+const COLOUR_LABS = COLOURS.map(([, c]) => rgbToLab(c >> 16, (c >> 8) & 255, c & 255));
+export function colourWord(rgb) {
+  const L = rgbToLab(rgb[0], rgb[1], rgb[2]);
+  let best = 0, bd = Infinity;
+  for (let k = 0; k < COLOUR_LABS.length; k++) {
+    const c = COLOUR_LABS[k], d = (c[0] - L[0]) ** 2 + (c[1] - L[1]) ** 2 + (c[2] - L[2]) ** 2;
+    if (d < bd) { bd = d; best = k; }
+  }
+  return COLOURS[best][0];
+}
 export function speciesName(hash) {
-  let h = Math.imul(hash ^ 0x5bd1e995, 0x27d4eb2d) >>> 0;
+  let h = Math.imul(hash ^ 0x5bd1e995, 0x27d4eb2d) >>> 0;   // re-mixed, so the creature isn't tied to the hue bits
   h ^= h >>> 13; h = Math.imul(h, 0x165667b1) >>> 0;
-  return ADJECTIVES[h % ADJECTIVES.length] + ' ' + ANIMALS[Math.floor(h / ADJECTIVES.length) % ANIMALS.length];
+  return colourWord(hslToRgb(...hashBaseHSL(hash))) + ' ' + CREATURES[h % CREATURES.length];
 }

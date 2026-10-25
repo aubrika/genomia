@@ -71,8 +71,8 @@ same hash picks each species' **shape** (square, pentagon, hexagon or circle).
 The **leaderboard** ranks the ten species with the most members alive at the same time
 since the last reset, counting related species that share a species hash (and so a
 look) as one. Each row shows the species' shape and colour, its peak and current
-counts, and a silly name (adjective + animal, such as "deciduous fish") picked from its
-species hash. The same name appears in the hover read-out of each cell.
+counts, and a name picked from its species hash: the colour word nearest to its colour
+plus an invented creature, such as "cerulean juko". The same name appears in the hover read-out of each cell.
 
 Each cell also carries a **heading**, inherited by its offspring. Its **pack instinct**
 gene sets how much it steers by that heading and turns it toward its neighbours'
