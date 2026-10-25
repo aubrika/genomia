@@ -492,12 +492,14 @@ const PRESETS = [
     P: { mu: 0.02, sigma: 0.6 },
     init: { layout: 'lattice', genomeInit: 'brush', population: 9000, spread: 0.03 },
   },
-  { // Gray goo — costs off from 6000 random genomes. Tolerance is free, so survival and
+  { // Gray goo — costs off from 12000 random genomes (random body sizes make the opening
+    // crash deep; 12000 leaves enough survivors to recover in every tested seed).
+    // Tolerance is free, so survival and
     // breeding windows open to their limits, fertility maxes out and the habitat fills
     // to the cap; several lineages survive but all converge on the same grey phenotype.
     brush: { rScale: 1.2, sLo: 0.0, sHi: 6, bLo: 0.0, bHi: 6, fec: 0.30, dDisp: 1.0, dCV: 0.3, step: 0.10, taxis: 0.0 },
     P: { costsOn: false },
-    init: { layout: 'uniform', genomeInit: 'uniform', population: 6000 },
+    init: { layout: 'uniform', genomeInit: 'uniform', population: 12000 },
     color: 'phenotype',
   },
   { // Blend collapse — a viable clone seeded with extra genetic spread, inherited by
