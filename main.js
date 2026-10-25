@@ -130,6 +130,7 @@ const HELP = {
   fieldRegrow: 'How fast the resource field refills toward its local capacity each tick ("sunlight"). Low = grazed patches stay bare for a while, so autotrophs must spread out; high = food comes back fast.',
   autoGain: 'Autotroph harvest rate: energy a pure plant gains per tick sitting on a full field cell. Raise it to make photosynthesis pay better and plants dominate.',
   predRate: 'Predation rate: energy a pure animal drains from a neighbour per tick. Raise it to make hunting pay better and animals dominate (until they eat all the plants).',
+  huntThreshold: 'Cooperative hunting. 0 = off: every predator drains its prey on its own. Above 0, prey can only be brought down together: a predator’s bite lands in proportion to (total predation pressure on that prey ÷ this threshold)², capped at 1. A lone hunter at a third of the threshold lands about 11% of its bite; a pack that reaches it lands all of it. This is what makes hunting in packs pay (pair it with pack instinct). Only cells with a real predation ability count as hunters.',
   trophicExp: 'Specialization curve. 1 = a generalist is as good as a specialist (no split). Above 1, being half-plant-half-animal is inefficient, so disruptive selection pushes cells to the pure-plant and pure-animal extremes — the cleaner the split.',
   upkeep: 'Base metabolic energy drained every tick, regardless of genome. Higher = cells starve sooner and must feed more actively.',
   geneCost: 'Extra upkeep charged per unit of genome complexity (long reach, high restlessness, wide survival/breeding windows, strong sociability). This is the "greater features cost more food" term — elaborate cells must out-feed simple ones to survive.',
@@ -164,7 +165,7 @@ const HELP = {
 const GENE_LABELS = ['reach', 'loneliness limit', 'crowding limit', 'breeding company', 'nursery limit',
   'fertility', 'seed throw', 'throw scatter', 'restlessness', 'sociability', 'diet', 'pack instinct'];
 
-const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Aggregation', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web', 'Two lineages', 'Flocks'];
+const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Aggregation', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web', 'Two lineages', 'Flocks', 'Hunting packs'];
 const DEFAULT_PRESET = PRESET_NAMES.indexOf('Trophic web');   // the scenario a fresh visit opens on (and runs)
 // short, persistent one-liners shown under the preset menu (no hover needed)
 const PRESET_BLURBS = [
@@ -178,6 +179,7 @@ const PRESET_BLURBS = [
   'Energy model on: plants graze the flora, animals evolve to hunt them.',
   'Two randomized founder lineages start on opposite halves and compete across a front.',
   'Strong pack instinct under a low population limit: cells fall into step and travel as flocks.',
+  'Cooperative hunting: predators (triangles) only bring down prey together, so they hunt in packs.',
 ];
 
 // ---- side panel -----------------------------------------------------------
@@ -258,6 +260,7 @@ function buildSide() {
     slider('field regrow', 0, 0.3, 0.005, () => P.fieldRegrow, (v) => P.fieldRegrow = v, (v) => v.toFixed(3), HELP.fieldRegrow),
     slider('autotroph gain', 0, 1.5, 0.02, () => P.autoGain, (v) => P.autoGain = v, f2, HELP.autoGain),
     slider('predation', 0, 1.5, 0.02, () => P.predRate, (v) => P.predRate = v, f2, HELP.predRate),
+    (() => { const r = slider('pack hunting', 0, 2, 0.05, () => P.huntThreshold, (v) => P.huntThreshold = v, f2, HELP.huntThreshold); r.classList.add('stack'); return r; })(),
     slider('specialization', 1, 4, 0.05, () => P.trophicExp, (v) => P.trophicExp = v, f2, HELP.trophicExp),
     slider('upkeep', 0, 0.3, 0.005, () => P.upkeep, (v) => P.upkeep = v, (v) => v.toFixed(3), HELP.upkeep),
     slider('feature cost', 0, 0.5, 0.01, () => P.geneCost, (v) => P.geneCost = v, f2, HELP.geneCost),
@@ -309,7 +312,7 @@ function buildSide() {
   side.append(section('Initialize', [
     popRow,
     ctrlSelect('layout', [['uniform', 'uniform'], ['blob', 'central blob'], ['kblobs', 'k blobs'], ['ring', 'ring'], ['lattice', 'jittered lattice']], init.layout, (v) => init.layout = v, HELP.layout),
-    ctrlSelect('genome', [['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B'], ['tworand', 'two random']], init.genomeInit, (v) => init.genomeInit = v, HELP.genomeInit),
+    ctrlSelect('genome', [['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B'], ['tworand', 'two random'], ['packs', 'prey + packs']], init.genomeInit, (v) => init.genomeInit = v, HELP.genomeInit),
     slider('spread', 0, 0.15, 0.005, () => init.spread, (v) => init.spread = v, (v) => v.toFixed(3), HELP.spread),
     button('apply init', applyInit, '', HELP.applyInit),
   ], 'reset'));
@@ -495,8 +498,8 @@ const PRESETS = [
     // population thins, then regrows as dense colonies that drift and merge; by ~2000
     // ticks usually 1–4 remain (sometimes up to ~8, still merging).
     brush: { rScale: 1.0, sLo: 0.22, sHi: 6.0, bLo: 0.4, bHi: 2.93, fec: 0.27, dDisp: 0.5, dCV: 0.3, step: 0.29, taxis: 0.67 },
-    P: { mu: 0.05, cap: 4000 },
-    init: { layout: 'uniform', genomeInit: 'brush', population: 3500 },
+    P: { mu: 0.05, cap: 3500 },
+    init: { layout: 'uniform', genomeInit: 'brush', population: 3000 },
   },
   { // Allee frontier — one colony with a high loneliness limit: cells that stray from
     // the group die, so the colony grows only at its edge, as a front that sweeps the
@@ -544,6 +547,21 @@ const PRESETS = [
     brush: { rScale: 1.0, sLo: 0.4, sHi: 4.5, bLo: 0.8, bHi: 3.6, fec: 0.22, dDisp: 0.6, dCV: 0.3, step: 0.2, taxis: 0.2, align: 0.9 },
     P: { cap: 3000, headNoise: 0.1, mu: 0.03 },
     init: { genomeInit: 'brush', population: 2500 },
+  },
+  { // Hunting packs — the Trophic web's plants plus five packs of omnivorous hunters
+    // (diet 0.73) with strong pack instinct, under cooperative hunting: a bite only lands
+    // fully when enough hunters press the same prey. Hunters persist as ~15–20 travelling
+    // packs of ~20–40 that hold their course; with cooperative hunting off they dwindle
+    // to a few dozen, and without pack instinct they survive only as stationary clumps.
+    brush: { rScale: 1.0, sLo: 0.0, sHi: 6.0, bLo: 0.2, bHi: 6.0, fec: 0.5, dDisp: 0.45, dCV: 0.4, step: 0.06, taxis: 0.3, trophic: 0.05 },
+    brushB: { rScale: 0.96, sLo: 0.27, sHi: 5.1, bLo: 1.04, bHi: 5.68, fec: 0.056, dDisp: 0.6, dCV: 0.3, step: 0.09, taxis: 0.25, trophic: 0.73, align: 0.94 },
+    P: {
+      costsOn: true, recomb: 'crossover', mutation: 'gaussian', sigma: 0.3, mu: 0.02, sigmaG: 0.06, macroRate: 0.004, headNoise: 0.14,
+      energyOn: true, fieldContrast: 0.8, fieldRegrow: 0.20, autoGain: 1.1, predRate: 1.06, predGain: 0.88, trophicExp: 1.9, upkeep: 0.009, geneCost: 0.03, birthCost: 2.17,
+      isolation: 0.3, huntThreshold: 0.75,
+    },
+    init: { genomeInit: 'packs', population: 3500, spread: 0.03, packs: 5, packSize: 33 },
+    color: 'trophic',
   },
 ];
 // A preset is a whole scenario: every rule and seeding setting starts from the
@@ -865,7 +883,7 @@ buildSide();
 buildBottom();
 // A fresh visit opens on the default scenario, running (unless the viewer prefers
 // reduced motion). A shared link re-seeds its own settings; #preset=N picks another.
-const presetM = devHash.match(/preset=?(\d)/);  // #preset=1 — boot into a preset (dev/testing)
+const presetM = devHash.match(/preset=?(\d+)/);  // #preset=1 — boot into a preset (dev/testing)
 if (fromLink) applyInit();
 else {
   applyPreset(presetM ? +presetM[1] - 1 : DEFAULT_PRESET);   // applyPreset starts playing

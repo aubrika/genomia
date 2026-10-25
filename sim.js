@@ -67,6 +67,8 @@ export const DEFAULTS = {
   autoGain: 1.1,          // autotroph harvest rate (energy gained per tick at a full field cell)
   predRate: 0.6,          // heterotroph predation rate (energy drained from a neighbor per tick)
   predGain: 0.6,          // fraction of drained energy the predator keeps (<1 = trophic loss)
+  huntThreshold: 0,       // cooperative hunting: summed predation pressure a prey must be under for bites to
+                          //   land fully (each bite lands (pressure/threshold)², capped at 1). 0 = off
   trophicExp: 1.8,        // specialization curve: >1 makes generalists inefficient, favoring the plant/animal split
   upkeep: 0.02,           // base metabolic drain per tick
   geneCost: 0.03,         // extra upkeep per unit genome complexity (perception, motility, tolerance, steering)
@@ -307,6 +309,7 @@ function ensureScratch(state) {
       hux: new Float32Array(cap), huy: new Float32Array(cap),        // heading unit vectors (tick start)
       mhx: new Float32Array(cap), mhy: new Float32Array(cap),        // neighbours' mean heading (kernel-weighted)
       bh: new Float32Array(cap),                                     // newborn headings
+      press: new Float32Array(cap), hI: null, hJ: null, hD: null,    // cooperative hunting: pressure per prey, bites (hunter, prey, drain)
       gNext: new Int32Array(2 * cap), gPrev: new Int32Array(2 * cap), gCell: new Int32Array(2 * cap), // collision-grid lists (cells + newborns)
       counts: null, cursor: null, gHead: null,
     };
@@ -442,6 +445,15 @@ export function step(state, P) {
   const halfWx = Wx / 2, halfWy = Wy / 2;
   const hux = s.hux, huy = s.huy, mhx = s.mhx, mhy = s.mhy;
   for (let i = 0; i < N; i++) { hux[i] = Math.cos(HD[i]); huy[i] = Math.sin(HD[i]); }
+  // Cooperative hunting: bites are recorded here and settled after the pass, once each
+  // prey's total pressure is known. Only real hunters (predation efficiency ≥ 0.01) bite.
+  const coop = eOn && P.huntThreshold > 0, press = s.press;
+  let nb = 0;
+  if (coop) {
+    press.fill(0, 0, N);
+    if (!s.hI) { s.hI = new Int32Array(8 * state.cap); s.hJ = new Int32Array(8 * state.cap); s.hD = new Float32Array(8 * state.cap); }
+  }
+  let hI = s.hI, hJ = s.hJ, hD = s.hD;
   for (let i = 0; i < N; i++) {
     const base = i * G;
     const ri = R * GEN[base + GENE.rScale], ri2 = ri * ri;
@@ -468,7 +480,17 @@ export function step(state, P) {
             if (d > 1e-9) { const inv = wgt / d; agx += inv * dx; agy += inv * dy; }
             // predation: i drains energy from neighbor j; soft prey (low predEff)
             // is more vulnerable than a tough predator, so animals eat plants first.
-            if (pei > 0) { const drain = predRate * pei * wgt * (1 - pe[j]); dEi += predGain * drain; dE[j] -= drain; }
+            if (pei > 0) {
+              const drain = predRate * pei * wgt * (1 - pe[j]);
+              if (!coop) { dEi += predGain * drain; dE[j] -= drain; }
+              else if (pei >= 0.01) {
+                if (nb >= hI.length) {   // rare: grow the bite list
+                  const g = (a, T) => { const b = new T(a.length * 2); b.set(a); return b; };
+                  hI = s.hI = g(hI, Int32Array); hJ = s.hJ = g(hJ, Int32Array); hD = s.hD = g(hD, Float32Array);
+                }
+                press[j] += drain; hI[nb] = i; hJ[nb] = j; hD[nb] = drain; nb++;
+              }
+            }
           }
         }
       }
@@ -482,6 +504,15 @@ export function step(state, P) {
     if (eOn) dE[i] += dEi;
     const gl = Math.hypot(agx, agy);
     if (gl > 1e-12) { gx[i] = agx / gl; gy[i] = agy / gl; } else { gx[i] = 0; gy[i] = 0; }
+  }
+
+  // Settle cooperative bites: each lands (pressure on its prey / threshold)², capped at 1.
+  if (coop) {
+    const T = P.huntThreshold;
+    for (let k = 0; k < nb; k++) {
+      const j = hJ[k], r = press[j] / T, d = hD[k] * (r >= 1 ? 1 : r * r);
+      dE[j] -= d; dE[hI[k]] += predGain * d;
+    }
   }
 
   // 2b. Energy — the field regrows toward capacity, autotrophs graze it (competing as
