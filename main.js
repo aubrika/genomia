@@ -5,7 +5,7 @@ import {
   geneRanges, DEFAULTS, MAXCAP, G, GENE, GENE_NAMES,
 } from './sim.js';
 import { seedPopulation } from './seed.js';
-import { draw, hslToRgb, speciesSides, SHAPE_NAMES } from './render.js';
+import { draw, hslToRgb, speciesSides, SHAPE_NAMES, makeSpeciesHasher } from './render.js';
 import { createGLRenderer } from './render_gl.js';
 
 // ---- state ----------------------------------------------------------------
@@ -17,7 +17,7 @@ let fieldNonce = Date.now() >>> 0;
 const freshFieldSeed = () => { fieldNonce = (fieldNonce + 0x9e3779b1) >>> 0; return fieldNonce; };
 let pinnedFieldSeed = null;   // set by a shared link: the next reset reuses that flora pattern instead
 const view = { scale: 1, ox: 0, oy: 0 };
-const ui = { playing: false, speed: 1, colorMode: 'lineage', showLines: true, shapes: true, lineCap: 20000, hovered: -1 };
+const ui = { playing: false, speed: 1, colorMode: 'hash', showLines: true, shapes: true, lineCap: 20000, hovered: -1 };
 // Fast-forward: simulation ticks per drawn frame. 'max' (Infinity) runs as many as fit
 // in the frame's time budget; every speed is capped by that budget so the page stays
 // responsive on slow machines.
@@ -38,6 +38,7 @@ function specInto(g, spec) {
   g[GENE.step] = spec.step * P.R; g[GENE.taxis] = spec.taxis;
   if (spec.trophic != null) g[GENE.trophic] = spec.trophic;
   if (spec.align != null) g[GENE.align] = spec.align;
+  if (spec.body != null) g[GENE.body] = spec.body;
   return g;
 }
 function setBrush(spec) { specInto(brush, spec); brushDirty = true; }
@@ -58,7 +59,7 @@ function brushFounder() {
   }
   return { lineage: curLineage, species: curSpecies };
 }
-setBrush({ rScale: 1.0, sLo: 0.4, sHi: 4.5, bLo: 0.8, bHi: 3.6, fec: 0.22, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10, trophic: 0.5, align: 0 });
+setBrush({ rScale: 1.0, sLo: 0.4, sHi: 4.5, bLo: 0.8, bHi: 3.6, fec: 0.22, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10, trophic: 0.5, align: 0, body: 0.26 });
 
 const geneR = () => geneRanges(P.R);
 
@@ -95,18 +96,19 @@ const f2 = (v) => (Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
 const HELP = {
   // Gene tooltips: a plain-language reading first, then the exact mechanics. The
   // first line names the friendly label with its code name, which is what sim.js uses.
-  rScale: 'Reach (rScale)\n\nHow far this cell can sense its neighbours. Everything it reacts to (crowding, steering, choosing a mate, and, for predators, who it can eat) happens within this distance. A longer reach averages over more neighbours, so it reads crowding more reliably, but it costs more.\n\nHow it works: sensing radius r = R × reach, where R is the world’s base interaction radius. A neighbour at distance d inside r adds (1 − d²/r²)², so near neighbours count fully and distant ones barely. That sum is divided by reach², which makes crowding a density: the same neighbourhood reads the same crowding whatever the reach. Range 0.5–1.5. Costs kSense × reach². Also sets body size: long reach = a bigger body (with low fertility).',
+  rScale: 'Reach (rScale)\n\nHow far this cell can sense its neighbours. Everything it reacts to (crowding, steering, choosing a mate, and, for predators, who it can eat) happens within this distance. A longer reach averages over more neighbours, so it reads crowding more reliably, but it costs more.\n\nHow it works: sensing radius r = R × reach, where R is the world’s base interaction radius. A neighbour at distance d inside r adds (1 − d²/r²)², so near neighbours count fully and distant ones barely. That sum is divided by reach², which makes crowding a density: the same neighbourhood reads the same crowding whatever the reach. Range 0.5–1.5. Costs kSense × reach².',
   sLo: 'Loneliness limit (sLo)\n\nThe least company this cell can live with. If its neighbourhood thins out below this, it dies of loneliness (the Allee effect). Raise it and isolated cells and advancing edges die back.\n\nHow it works: the lower bound of the survival window. Each tick, survival chance = smoothstep up across [limit − σ, limit + σ] × smoothstep down across the crowding limit, where σ is the softness rule. With metabolic cost on, a wide window also carries a standing death risk (see generalist death). Measured in crowding units (weighted neighbours per base-reach area); range 0–6.',
   sHi: 'Crowding limit (sHi)\n\nThe most crowding this cell can bear. Pack its neighbourhood tighter than this and it dies of overcrowding. Lower it and cells can only persist in thin, sparse structures.\n\nHow it works: the upper bound of the survival window [loneliness limit, crowding limit], with a soft edge of ±σ. If it ends up below the loneliness limit, the two are swapped. Range 0–6. A wider window costs kTol in fertility and, with metabolic cost on, raises the per-tick death chance by generalist death × width/6.',
   bLo: 'Breeding company (bLo)\n\nHow much company this cell needs before it will breed. Below this, it can still survive but won’t reproduce.\n\nHow it works: the lower bound of the breeding window [breeding company, nursery limit], with a soft edge of ±σ. Only cells that survive the tick can breed. Each tick, birth chance = fertility × window × cost factor. Range 0–6. A wider window costs kTol.',
   bHi: 'Nursery limit (bHi)\n\nThe most crowding at which this cell will still breed. Above this, it stops reproducing even if it survives.\n\nHow it works: the upper bound of the breeding window [breeding company, nursery limit], with a soft edge of ±σ. If it ends up below breeding company, the two are swapped. Range 0–6. A wider window costs kTol.',
-  fecundity: 'Fertility (fecundity)\n\nHow eagerly this cell reproduces when conditions suit it.\n\nHow it works: the base chance per tick of producing one offspring while inside the breeding window. With metabolic cost on, it is multiplied by e^(−cost), where cost = kMove·(restlessness/R)² + kSense·reach² + kTol·(window widths)/12 + kTaxis·sociability². With the energy model on, cost is paid in energy instead, and the cell must also have banked 1.4 × breed cost. Range 0–0.30. Also sets body size: low fertility = a bigger body (with long reach).',
+  fecundity: 'Fertility (fecundity)\n\nHow eagerly this cell reproduces when conditions suit it.\n\nHow it works: the base chance per tick of producing one offspring while inside the breeding window. With metabolic cost on, it is multiplied by e^(−cost), where cost = kMove·(restlessness/R)² + kSense·reach² + kTol·(window widths)/12 + kTaxis·sociability². With the energy model on, cost is paid in energy instead, and the cell must also have banked 1.4 × breed cost. Range 0–0.30.',
   dDisp: 'Seed throw (dDisp)\n\nHow far from the parent its offspring land. Short throws reinforce the local cluster; long throws colonise gaps and new ground.\n\nHow it works: offspring are placed in a random direction at distance |throw × (1 + scatter × N(0,1))|, where N is a standard normal draw. Range 0.2R–3R, in world units. It scales with R, so it stays proportional when the window resizes.',
   dCV: 'Throw scatter (dCV)\n\nHow consistent the seed throw is. At 0, every offspring lands at exactly the throw distance; higher values spread them anywhere from close by to far away.\n\nHow it works: the coefficient of variation of the throw distance. Distance = |throw × (1 + scatter × N(0,1))|. Range 0–1.',
   step: 'Restlessness (step)\n\nHow far this cell moves each tick. Sessile cells hold their ground; restless ones roam and mix.\n\nHow it works: each tick the cell moves exactly this distance, in a direction mixed from a random heading and its sociability steering. Range 0–0.3R, in world units, scaled with R. Costs kMove × (restlessness/R)².',
-  taxis: 'Sociability (taxis)\n\nWhether this cell drifts toward company or away from it. +1 = seeks crowds (aggregates into clumps), −1 = shuns them (spreads out), 0 = wanders at random.\n\nHow it works: direction = (1 − |s|) × random heading + s × ĝ, normalised, where ĝ points up the local crowding gradient (toward denser neighbours, within reach). Range −1 to +1. Costs kTaxis × sociability². Its species’ average sociability sets the drawn shape: square (shuns) → pentagon → hexagon → circle (seeks); strongly pack-minded species are triangles instead.',
+  taxis: 'Sociability (taxis)\n\nWhether this cell drifts toward company or away from it. +1 = seeks crowds (aggregates into clumps), −1 = shuns them (spreads out), 0 = wanders at random.\n\nHow it works: direction = (1 − |s|) × random heading + s × ĝ, normalised, where ĝ points up the local crowding gradient (toward denser neighbours, within reach). Range −1 to +1. Costs kTaxis × sociability².',
   trophic: 'Diet (trophic)\n\nWhat this cell eats when the energy model is on. 0 = pure “plant”: grazes the resource field. 1 = pure “animal”: preys on neighbouring cells. Has no effect while the energy model is off.\n\nHow it works: grazing efficiency = (1 − diet)^p and hunting efficiency = diet^p, where p is the specialization rule. When p > 1, generalists are worse at both, so selection pushes lineages to the extremes. A hunter drains predation × its efficiency × closeness × (1 − the prey’s hunting efficiency) from each neighbour in reach per tick, and keeps a predGain share of it. Cells with diet ≥ 0.5 count as animals. Range 0–1.',
   align: 'Pack instinct (align)\n\nHow much this cell travels with its neighbours. At 0 it wanders on a fresh random heading every tick. Higher, it keeps a heading of its own and turns it toward the average heading of the cells around it, so neighbours fall into step and the group moves as one: a flock, school or hunting pack. Offspring inherit their parent’s heading.\n\nHow it works: each tick, heading ← (1 − a)·own + a·(kernel-weighted mean of neighbours’ headings within reach), then jittered by ±heading noise. The move direction blends a random heading (weight 1 − a) with that heading (weight a), then sociability’s pull as usual. Range 0–1. Costs kAlign × a². Species with pack instinct ≥ 0.5 are drawn as triangles pointing where they are going.',
+  body: 'Body size (body)\n\nHow big this cell is: its solid body, and exactly what is drawn. Bigger bodies claim more room, so fewer fit in a crowd and offspring need a larger free spot to land.\n\nHow it works: body radius = R × (0.06 + 0.29 × size), from 0.06R to 0.35R. With bodies on, no two bodies may overlap. Range 0–1.',
   sigma: 'Band-edge softness. Birth/death thresholds are fuzzy, not hard: σ is the half-width of the smooth transition around each bound. Small σ ≈ crisp, Conway-like rules; large σ = gradual.',
   maxAgeToggle: 'When on, cells also die of old age once they pass "max age". Off by default — death is otherwise purely density-driven.',
   maxAge: 'Ticks a cell can live before dying of old age (only when max-age death is on).',
@@ -129,7 +131,7 @@ const HELP = {
   speciesThreshold: 'Species threshold (genetic distance, the FINE tier). Each species keeps a reference genome that follows its members as they drift. An offspring that differs from that reference by more than this founds a new species within the same genus, so a species splits only when part of it diverges from the rest. Lower = species split more readily; 0 = never.',
   genusThreshold: 'Genus threshold (genetic distance, the COARSE tier). Like the species threshold, but measured from the genus’ reference genome (which also follows its members): an offspring beyond this founds a new genus (and a new species inside it). Set it above the species threshold; genus = the larger colour family, species = the shade within it. 0 = off.',
   isolation: 'Reproductive isolation (genetic distance). With crossover, a second parent must be within this distance of the first, so diverged species stop interbreeding and can drift apart. 0 = off (mate with any neighbour).',
-  color: 'phenotype = colour encodes the genome (hue = the middle of its survival window, saturation = how narrow that window is, lightness = restlessness) — similar genomes look similar. genealogy = each founder lineage gets a distinct base hue and every speciation steps the colour a little, so related species share a colour family and drift step-wise. trophic = green autotrophs ("plants") → red heterotrophs ("animals"), brightness = current energy (needs the energy model on).',
+  color: 'species hash = each species gets an arbitrary colour from a hash of its reference genome (coarsely binned, so it stays put until the species drifts or splits); each cell shimmers slightly lighter or darker by how its own genes differ from its species’. phenotype = colour encodes the genome (hue = the middle of its survival window, saturation = how narrow that window is, lightness = restlessness) — similar genomes look similar. genealogy = each founder lineage gets a distinct base hue and every speciation steps the colour a little, so related species share a colour family and drift step-wise. trophic = green autotrophs ("plants") → red heterotrophs ("animals"), brightness = current energy (needs the energy model on).',
   energy: 'Energy / trophic model. When ON, every cell carries an energy budget: it pays metabolic upkeep each tick (more complex genomes cost more), FEEDS to refill it — autotrophs harvest the resource field (the olive gradient), heterotrophs prey on nearby cells — STARVES if energy hits zero, and must bank enough energy to reproduce. The `trophic` gene sets the mix, so selection can split a lineage into plants and animals. (Replaces the fecundity-discount cost model while on.)',
   fieldContrast: 'Patchiness of the resource field. 0 = flat (food everywhere), 1 = high-contrast peaks and deserts. Patchier fields reward autotrophs that sit in the rich spots and push others to prey instead.',
   fieldRegrow: 'How fast the resource field refills toward its local capacity each tick ("sunlight"). Low = grazed patches stay bare for a while, so autotrophs must spread out; high = food comes back fast.',
@@ -140,7 +142,7 @@ const HELP = {
   upkeep: 'Base metabolic energy drained every tick, regardless of genome. Higher = cells starve sooner and must feed more actively.',
   geneCost: 'Extra upkeep charged per unit of genome complexity (long reach, high restlessness, wide survival/breeding windows, strong sociability). This is the "greater features cost more food" term — elaborate cells must out-feed simple ones to survive.',
   birthCost: 'Energy a parent invests into each offspring (the child starts life with it). A cell must bank ~1.4× this to breed, so reproduction is a real energy decision, not free.',
-  shapes: 'Cell shapes. Each cell is drawn at its body size (bigger for long reach and low fertility). Its polygon is a SPECIES trait: species with strong pack instinct are triangles pointing the way they are heading; otherwise sociability picks square (shuns crowds), pentagon, hexagon or circle (seeks crowds). OFF draws every cell as a circle (still at body size).',
+  shapes: 'Cell shapes. Each cell is drawn at its body size (the body-size gene). Its polygon is a SPECIES trait: species with strong pack instinct are triangles pointing the way they are heading; otherwise the species hash picks square, pentagon, hexagon or circle, so different species usually look different. OFF draws every cell as a circle (still at body size).',
   bodies: 'Solid bodies. When ON, every cell occupies its drawn body: an offspring can’t land on another cell (it tries a few directions, else the birth fails), and a move that would overlap another cell is skipped that tick. Bigger bodies therefore claim more room. OFF = the old point-particle physics, where cells can pile up anywhere.',
   lines: 'Draw a link between cells that perceive each other. Solid = mutual perception, dashed = one-way (a real consequence of different rScale). Line opacity follows perception strength, so links fade in and out as cells drift.',
   seed: 'Random seed. The same seed plus the same parameters reproduces a run exactly — in the same window size, since the habitat scales with the window. (The resource field is re-randomized on every reset, so trophic runs vary each time; a shared link pins it.)',
@@ -169,7 +171,7 @@ const HELP = {
 // Friendly on-screen names for the genes. The code names (GENE_NAMES) stay the
 // vocabulary of sim.js, shared links and the tooltips' first line.
 const GENE_LABELS = ['reach', 'loneliness limit', 'crowding limit', 'breeding company', 'nursery limit',
-  'fertility', 'seed throw', 'throw scatter', 'restlessness', 'sociability', 'diet', 'pack instinct'];
+  'fertility', 'seed throw', 'throw scatter', 'restlessness', 'sociability', 'diet', 'pack instinct', 'body size'];
 
 const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Aggregation', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web', 'Two lineages', 'Flocks', 'Hunting packs', 'Coevolution'];
 const DEFAULT_PRESET = PRESET_NAMES.indexOf('Trophic web');   // the scenario a fresh visit opens on (and runs)
@@ -300,7 +302,7 @@ function buildSide() {
     ui.shapes = !ui.shapes; shapesBtn.textContent = ui.shapes ? 'shapes ON' : 'shapes OFF'; shapesBtn.classList.toggle('on', ui.shapes);
   }, ui.shapes ? 'on' : '', HELP.shapes);
   side.append(section('Rendering', [
-    ctrlSelect('color', [['phenotype', 'phenotype'], ['lineage', 'genealogy'], ['trophic', 'trophic']], ui.colorMode, (v) => ui.colorMode = v, HELP.color),
+    ctrlSelect('color', [['hash', 'species hash'], ['phenotype', 'phenotype'], ['lineage', 'genealogy'], ['trophic', 'trophic']], ui.colorMode, (v) => ui.colorMode = v, HELP.color),
     el('div', { class: 'row' }, [linesBtn, shapesBtn]),
   ], 'view'));
 
@@ -599,10 +601,10 @@ function applyPreset(i) {
   curPreset = i;
   const keep = { worldW: P.worldW, worldH: P.worldH, R: P.R, fieldSeed: P.fieldSeed };
   Object.assign(P, DEFAULTS, keep, pr.P);
-  setBrush(Object.assign({ trophic: 0.5, align: 0 }, pr.brush));
-  brushB = pr.brushB ? specInto(new Float32Array(G), Object.assign({ trophic: 0.5, align: 0 }, pr.brushB)) : null;
+  setBrush(Object.assign({ trophic: 0.5, align: 0, body: 0.26 }, pr.brush));
+  brushB = pr.brushB ? specInto(new Float32Array(G), Object.assign({ trophic: 0.5, align: 0, body: 0.26 }, pr.brushB)) : null;
   Object.assign(init, INIT_DEFAULTS, { seed: init.seed, blobN: init.blobN, blobJitter: init.blobJitter }, pr.init);
-  ui.colorMode = pr.color || 'lineage';
+  ui.colorMode = pr.color || 'hash';
   ui.speed = pr.speed || 1;
   if (pr.gene) { selGene = GENE[pr.gene]; const dd = $('#bottom select'); if (dd) dd.value = String(selGene); }
   buildSide();
@@ -748,7 +750,7 @@ function updateTooltip(e) {
   const rows = GENE_LABELS.map((n, g) => `<span class="k">${n}</span> ${g === GENE.fecundity ? state.genome[base + g].toFixed(3) : f2(state.genome[base + g])}`);
   const en = P.energyOn ? ` · <span class="k">e</span> ${state.energy[ui.hovered].toFixed(1)}` : '';
   const sp = state.species[ui.hovered];
-  tip.innerHTML = `<b>#${ui.hovered}</b> · lin ${state.lineage[ui.hovered]} · genus ${state.spGenus[sp]} · sp ${sp} · ${SHAPE_NAMES[speciesSides(state, sp)]} · age ${state.age[ui.hovered] | 0}${en}<br>` + rows.join('<br>');
+  tip.innerHTML = `<b>#${ui.hovered}</b> · lin ${state.lineage[ui.hovered]} · genus ${state.spGenus[sp]} · sp ${sp} · ${SHAPE_NAMES[speciesSides(state, sp, makeSpeciesHasher(state, P.R))]} · age ${state.age[ui.hovered] | 0}${en}<br>` + rows.join('<br>');
   tip.style.display = 'block';
   const r = canvas.getBoundingClientRect();
   let x = e.clientX - r.left + 14, y = e.clientY - r.top + 14;
@@ -787,8 +789,10 @@ function applyConfig(str) {
   if (cfg.init && typeof cfg.init === 'object') for (const k in cfg.init) if (Object.hasOwn(init, k) && sameType(cfg.init[k], init[k])) init[k] = cfg.init[k];
   if (Number.isFinite(cfg.seed)) init.seed = cfg.seed | 0;
   if (Number.isFinite(cfg.fs)) pinnedFieldSeed = cfg.fs >>> 0;
-  // links from before the alignment gene carry 11 brush genes: pad with alignment 0
-  if (Array.isArray(cfg.b) && cfg.b.length === G - 1) cfg.b = cfg.b.concat([0]);
+  // older links carry fewer brush genes: pad with the defaults of the genes added since
+  // (pack instinct 0, body size 0.26)
+  const pad = (b) => (Array.isArray(b) && b.length >= G - 2 && b.length < G ? b.concat([0, 0.26].slice(b.length - (G - 2))) : b);
+  cfg.b = pad(cfg.b); cfg.b2 = pad(cfg.b2);
   if (Array.isArray(cfg.b) && cfg.b.length === G && cfg.b.every(Number.isFinite)) {
     for (let g = 0; g < G; g++) brush[g] = R_RELATIVE(g) ? cfg.b[g] * P.R : cfg.b[g];
     markBrushDirty();
@@ -797,7 +801,7 @@ function applyConfig(str) {
     brushB = new Float32Array(G);
     for (let g = 0; g < G; g++) brushB[g] = R_RELATIVE(g) ? cfg.b2[g] * P.R : cfg.b2[g];
   }
-  if (['phenotype', 'lineage', 'trophic'].includes(cfg.c)) ui.colorMode = cfg.c;
+  if (['hash', 'phenotype', 'lineage', 'trophic'].includes(cfg.c)) ui.colorMode = cfg.c;
   if (cfg.l === 0 || cfg.l === 1) ui.showLines = !!cfg.l;
   if (cfg.sh === 0 || cfg.sh === 1) ui.shapes = !!cfg.sh;
   if (Number.isInteger(cfg.pr) && cfg.pr >= -1 && cfg.pr < PRESETS.length) curPreset = cfg.pr;

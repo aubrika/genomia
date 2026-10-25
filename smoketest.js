@@ -11,7 +11,7 @@ function mk(spec, R) {
   g[GENE.rScale] = spec.rScale; g[GENE.sLo] = spec.sLo; g[GENE.sHi] = spec.sHi;
   g[GENE.bLo] = spec.bLo; g[GENE.bHi] = spec.bHi; g[GENE.fecundity] = spec.fec;
   g[GENE.dDisp] = spec.dDisp * R; g[GENE.dCV] = spec.dCV; g[GENE.step] = spec.step * R; g[GENE.taxis] = spec.taxis;
-  g[GENE.trophic] = 0.5;
+  g[GENE.trophic] = 0.5; g[GENE.body] = 0.26;
   return g;
 }
 // the app's default brush: a viable, moderately tolerant aggregator

@@ -7,13 +7,13 @@
 
 import { makeRNG } from './prng.js';
 
-export const G = 12; // genes per agent
+export const G = 13; // genes per agent
 export const GENE = {
   rScale: 0, sLo: 1, sHi: 2, bLo: 3, bHi: 4,
   fecundity: 5, dDisp: 6, dCV: 7, step: 8, taxis: 9,
-  trophic: 10, align: 11,
+  trophic: 10, align: 11, body: 12,
 };
-export const GENE_NAMES = ['rScale', 'sLo', 'sHi', 'bLo', 'bHi', 'fecundity', 'dDisp', 'dCV', 'step', 'taxis', 'trophic', 'align'];
+export const GENE_NAMES = ['rScale', 'sLo', 'sHi', 'bLo', 'bHi', 'fecundity', 'dDisp', 'dCV', 'step', 'taxis', 'trophic', 'align', 'body'];
 
 // Gene ranges. dDisp and step scale with the global interaction radius R, so the
 // dispersal/motility genes are always expressed relative to perception distance.
@@ -32,6 +32,7 @@ export function geneRanges(R) {
     [-1, 1],      // taxis
     [0, 1],       // trophic: 0 = pure autotroph (feed on the field), 1 = pure heterotroph (feed on other cells)
     [0, 1],       // align: 0 = moves on a fresh random heading each tick, 1 = steers by its own heading, turned toward its neighbours' (flocking)
+    [0, 1],       // body: body size, 0 = smallest (0.06R radius) to 1 = largest (0.35R)
   ];
 }
 
@@ -120,32 +121,31 @@ export function foundClade(state, genome, off, lineageId) {
   return foundSpecies(state, genome, off, lineageId, -1, g, true);
 }
 
-// Body size — a readout of the reproductive strategy: long reach and low fertility make
-// a big body (few, large, slow breeders), short reach and high fertility a small one.
-// Radius is in units of R (so it scales with the window like every other length):
-// 0.09R–0.21R. With bodies on it is physical (cells can't overlap); the renderers draw
-// each cell at exactly this radius.
-export const BODY_MIN = 0.09, BODY_SPAN = 0.12;
+// Body size — its own gene. Radius is in units of R (so it scales with the window like
+// every other length): 0.06R–0.35R. With bodies on it is physical (cells can't overlap);
+// the renderers draw each cell at exactly this radius.
+export const BODY_MIN = 0.06, BODY_SPAN = 0.29;
 export function bodyRadius(genome, base, R) {
-  let reach = genome[base + GENE.rScale] - 0.5;            // rScale range [0.5, 1.5] -> [0, 1]
-  let fert = genome[base + GENE.fecundity] / 0.3;           // fecundity range [0, 0.3] -> [0, 1]
-  if (reach < 0) reach = 0; else if (reach > 1) reach = 1;
-  if (fert < 0) fert = 0; else if (fert > 1) fert = 1;
-  return R * (BODY_MIN + BODY_SPAN * (0.5 * reach + 0.5 * (1 - fert)));
+  let b = genome[base + GENE.body];
+  if (b < 0) b = 0; else if (b > 1) b = 1;
+  return R * (BODY_MIN + BODY_SPAN * b);
 }
 
 // Occupancy grid for placing cells outside the step loop (seeding, painting): a sparse
 // bucket map of bodies, so "is this spot free?" checks only nearby cells.
 export function createOccupancy(state, P) {
   const Wx = P.worldW != null ? P.worldW : P.world, Wy = P.worldH != null ? P.worldH : P.world;
-  const c = P.R * 0.5, nx = Math.max(1, Math.ceil(Wx / c)), ny = Math.max(1, Math.ceil(Wy / c));
+  // buckets at least as wide as the largest pair of bodies (0.70R), and all full width
+  // (floor), so a 3x3 search also covers pairs across the wrap-around edge
+  const c = P.R * 0.71, nx = Math.max(1, Math.floor(Wx / c)), ny = Math.max(1, Math.floor(Wy / c));
+  const sx = nx / Wx, sy = ny / Wy;
   const buckets = new Map(), halfWx = Wx / 2, halfWy = Wy / 2;
-  const key = (x, y) => (Math.min(ny - 1, Math.max(0, (y / c) | 0))) * nx + Math.min(nx - 1, Math.max(0, (x / c) | 0));
+  const key = (x, y) => (Math.min(ny - 1, Math.max(0, (y * sy) | 0))) * nx + Math.min(nx - 1, Math.max(0, (x * sx) | 0));
   const add = (x, y, r) => { const k = key(x, y); let b = buckets.get(k); if (!b) buckets.set(k, b = []); b.push(x, y, r); };
   for (let i = 0; i < state.count; i++) add(state.x[i], state.y[i], bodyRadius(state.genome, i * G, P.R));
   const fits = (x, y, r) => {
     if (!P.bodiesOn) return true;
-    const bx = (x / c) | 0, by = (y / c) | 0;
+    const bx = Math.min(nx - 1, (x * sx) | 0), by = Math.min(ny - 1, (y * sy) | 0);
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       const b = buckets.get(((by + dy + ny) % ny) * nx + ((bx + dx + nx) % nx)); if (!b) continue;
       for (let k = 0; k < b.length; k += 3) {
@@ -560,11 +560,11 @@ export function step(state, P) {
   // Solid bodies: radius per cell, and an overlap test against every body present now —
   // surviving cells at their current positions and this tick's newborns. They live in a
   // collision grid of doubly-linked bucket lists that is kept up to date as cells are
-  // born and move, so a bucket only needs to span the largest pair of bodies (0.42R)
+  // born and move, so a bucket only needs to span the largest pair of bodies (0.70R)
   // and a 3x3 search around a point sees every body that could touch it.
   // Ids: cells are 0..N-1, newborns N+b.
   const bodies = !!P.bodiesOn, br = s.br, bR = s.bR;
-  const fnx = Math.max(1, Math.floor(Wx / (R * 0.43))), fny = Math.max(1, Math.floor(Wy / (R * 0.43))), fnc = fnx * fny;
+  const fnx = Math.max(1, Math.floor(Wx / (R * 0.71))), fny = Math.max(1, Math.floor(Wy / (R * 0.71))), fnc = fnx * fny;
   const fsx = fnx / Wx, fsy = fny / Wy;
   let gHead = s.gHead;
   const gNext = s.gNext, gPrev = s.gPrev, gCell = s.gCell;
