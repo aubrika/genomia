@@ -20,7 +20,7 @@ python3 -m http.server 8000
 # then open http://localhost:8000/
 ```
 
-Opens on the **Trophic web** scenario, running (paused if your system asks for reduced motion). **Space** play · **.** step · **R** reset · **H** hide the UI (just the habitat). Choose a scenario from the
+Opens on the **Trophic web** scenario, running (paused if your system asks for reduced motion). **Space** play · **.** step · **R** reset · **H** hide the UI (just the habitat) · **[ ]** slower / faster (fast-forward up to 16 ticks per frame, or max). Choose a scenario from the
 **preset** menu; hover any control to see what it does. **Copy link** shares a run
 (seed, rules, brush and flora pattern) and **snapshot** saves the habitat as a PNG.
 
@@ -39,6 +39,9 @@ Opens on the **Trophic web** scenario, running (paused if your system asks for r
   them at once) plus pack instinct: omnivorous hunters roam the plant field as
   travelling packs. Turn pack hunting off and they dwindle; drop the pack instinct
   and they survive only as stationary clumps.
+- **Coevolution**: cooperative hunting with nobody starting pack-minded, at max speed.
+  Over ~5–10k ticks the plants usually evolve herds (they turn into triangles and the
+  pack instinct chart climbs), and hunters sometimes evolve packs.
 - **Trophic web**: switch on the energy model and one lineage grazing the flora
   field evolves predators that hunt it: an emergent food chain (green plants → red
   animals).
