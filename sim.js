@@ -299,8 +299,9 @@ function ensureScratch(state) {
       bx: new Float32Array(cap), by: new Float32Array(cap), bl: new Int32Array(cap), bspecies: new Int32Array(cap),
       bg: new Float32Array(cap * G),
       dE: new Float32Array(cap), ae: new Float32Array(cap), pe: new Float32Array(cap), // energy: net feed delta, autotroph & predator efficiencies
-      br: new Float32Array(cap), bR: new Float32Array(cap), nbNext: new Int32Array(cap), // body radii (cells, newborns); newborn bucket chains
-      counts: null, cursor: null, nbHead: null,
+      br: new Float32Array(cap), bR: new Float32Array(cap),          // body radii: cells, newborns
+      gNext: new Int32Array(2 * cap), gPrev: new Int32Array(2 * cap), gCell: new Int32Array(2 * cap), // collision-grid lists (cells + newborns)
+      counts: null, cursor: null, gHead: null,
     };
   }
   return s;
@@ -512,48 +513,52 @@ export function step(state, P) {
     survive[i] = alive ? 1 : 0;
   }
 
-  // Solid bodies: radius per cell, and an overlap test against surviving cells (at their
-  // current positions — tick-start for births, already-moved for movement) and this
-  // tick's newborns (chained per bucket). Collisions use their own finer grid (bucket
-  // 0.75R, indexed at tick start): a 3x3 search reaches 0.75R, which covers two bodies
-  // (≤0.42R) plus any move made this tick (≤0.3R).
-  const bodies = !!P.bodiesOn, br = s.br, bR = s.bR, nbNext = s.nbNext;
-  const fb = R * 0.75;
-  const fnx = Math.max(1, Math.ceil(Wx / fb)), fny = Math.max(1, Math.ceil(Wy / fb)), fnc = fnx * fny;
-  let nbHead = s.nbHead, fCounts = s.fCounts, fItems = s.fItems;
+  // Solid bodies: radius per cell, and an overlap test against every body present now —
+  // surviving cells at their current positions and this tick's newborns. They live in a
+  // collision grid of doubly-linked bucket lists that is kept up to date as cells are
+  // born and move, so a bucket only needs to span the largest pair of bodies (0.42R)
+  // and a 3x3 search around a point sees every body that could touch it.
+  // Ids: cells are 0..N-1, newborns N+b.
+  const bodies = !!P.bodiesOn, br = s.br, bR = s.bR;
+  const fnx = Math.max(1, Math.floor(Wx / (R * 0.43))), fny = Math.max(1, Math.floor(Wy / (R * 0.43))), fnc = fnx * fny;
+  const fsx = fnx / Wx, fsy = fny / Wy;
+  let gHead = s.gHead;
+  const gNext = s.gNext, gPrev = s.gPrev, gCell = s.gCell;
   const bucketOf = (x, y) => {
-    let cx = (x / fb) | 0; if (cx >= fnx) cx = fnx - 1; else if (cx < 0) cx = 0;
-    let cy = (y / fb) | 0; if (cy >= fny) cy = fny - 1; else if (cy < 0) cy = 0;
+    let cx = (x * fsx) | 0; if (cx >= fnx) cx = fnx - 1; else if (cx < 0) cx = 0;
+    let cy = (y * fsy) | 0; if (cy >= fny) cy = fny - 1; else if (cy < 0) cy = 0;
     return cy * fnx + cx;
   };
+  const gInsert = (id, c) => {
+    const h = gHead[c];
+    gCell[id] = c; gPrev[id] = -1; gNext[id] = h;
+    if (h >= 0) gPrev[h] = id;
+    gHead[c] = id;
+  };
+  const gRemove = (id) => {
+    const p = gPrev[id], n = gNext[id];
+    if (p >= 0) gNext[p] = n; else gHead[gCell[id]] = n;
+    if (n >= 0) gPrev[n] = p;
+  };
   if (bodies) {
-    if (!nbHead || nbHead.length < fnc) { nbHead = s.nbHead = new Int32Array(fnc); fCounts = s.fCounts = new Int32Array(fnc + 1); }
-    if (!fItems) fItems = s.fItems = new Int32Array(state.cap);
-    nbHead.fill(-1, 0, fnc); fCounts.fill(0, 0, fnc + 1);
-    for (let i = 0; i < N; i++) { br[i] = bodyRadius(GEN, i * G, R); fCounts[bucketOf(X[i], Y[i]) + 1]++; }
-    for (let c = 0; c < fnc; c++) fCounts[c + 1] += fCounts[c];
-    for (let c = 0; c < fnc; c++) nbHead[c] = fCounts[c];   // temporary fill cursor
-    for (let i = 0; i < N; i++) fItems[nbHead[bucketOf(X[i], Y[i])]++] = i;
-    nbHead.fill(-1, 0, fnc);
+    if (!gHead || gHead.length < fnc) gHead = s.gHead = new Int32Array(fnc);
+    gHead.fill(-1, 0, fnc);
+    for (let i = 0; i < N; i++) { if (!survive[i]) continue; br[i] = bodyRadius(GEN, i * G, R); gInsert(i, bucketOf(X[i], Y[i])); }
   }
   const fits = (x, y, r, self) => {
-    const c0 = bucketOf(x, y), cx = c0 % fnx, cy = (c0 / fnx) | 0;
+    const c0 = bucketOf(x, y), cx = c0 % fnx, cy = (c0 - cx) / fnx;
     for (let ddy = -1; ddy <= 1; ddy++) {
-      const cyy = ((cy + ddy) % fny + fny) % fny;
+      let yy = cy + ddy; if (yy < 0) yy += fny; else if (yy >= fny) yy -= fny;
+      const row = yy * fnx;
       for (let ddx = -1; ddx <= 1; ddx++) {
-        const c = cyy * fnx + ((cx + ddx) % fnx + fnx) % fnx;
-        for (let p = fCounts[c]; p < fCounts[c + 1]; p++) {
-          const j = fItems[p]; if (j === self || !survive[j]) continue;
-          let dx = X[j] - x, dy = Y[j] - y;
+        let xx = cx + ddx; if (xx < 0) xx += fnx; else if (xx >= fnx) xx -= fnx;
+        for (let id = gHead[row + xx]; id >= 0; id = gNext[id]) {
+          if (id === self) continue;
+          let dx, dy, rj;
+          if (id < N) { dx = X[id] - x; dy = Y[id] - y; rj = br[id]; } else { const b = id - N; dx = bx[b] - x; dy = by[b] - y; rj = bR[b]; }
           if (dx > halfWx) dx -= Wx; else if (dx < -halfWx) dx += Wx;
           if (dy > halfWy) dy -= Wy; else if (dy < -halfWy) dy += Wy;
-          const rr2 = r + br[j]; if (dx * dx + dy * dy < rr2 * rr2) return false;
-        }
-        for (let b = nbHead[c]; b >= 0; b = nbNext[b]) {
-          let dx = bx[b] - x, dy = by[b] - y;
-          if (dx > halfWx) dx -= Wx; else if (dx < -halfWx) dx += Wx;
-          if (dy > halfWy) dy -= Wy; else if (dy < -halfWy) dy += Wy;
-          const rr2 = r + bR[b]; if (dx * dx + dy * dy < rr2 * rr2) return false;
+          const q = r + rj; if (dx * dx + dy * dy < q * q) return false;
         }
       }
     }
@@ -600,7 +605,7 @@ export function step(state, P) {
     if (!placed) continue;
     if (eOn) EN[i] -= birthCost;                           // parent invests energy into the child
     bx[bc] = px; by[bc] = py;
-    if (bodies) { bR[bc] = cr; const c = bucketOf(px, py); nbNext[bc] = nbHead[c]; nbHead[c] = bc; }
+    if (bodies) { bR[bc] = cr; gInsert(N + bc, bucketOf(px, py)); }
     bl[bc] = LIN[i];                       // lineage (founder) is inherited unchanged
     // Divergence taxonomy, coarse first: past the genus threshold => new genus (and a
     // new species inside it, marked as a big colour step); else past the species
@@ -636,7 +641,12 @@ export function step(state, P) {
     const dl = Math.hypot(dx, dy);
     if (dl > 1e-9) { dx /= dl; dy /= dl; } else { dx = rxu; dy = ryu; }
     const mx = wrap(X[i] + dx * st, Wx), my = wrap(Y[i] + dy * st, Wy);
-    if (!bodies || fits(mx, my, br[i], i)) { X[i] = mx; Y[i] = my; }   // blocked => stay put this tick
+    if (!bodies) { X[i] = mx; Y[i] = my; }
+    else if (fits(mx, my, br[i], i)) {                   // blocked => stay put this tick
+      const c = bucketOf(mx, my);
+      if (c !== gCell[i]) { gRemove(i); gInsert(i, c); }
+      X[i] = mx; Y[i] = my;
+    }
     AGE[i] += 1;
   }
 

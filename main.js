@@ -156,7 +156,8 @@ const HELP = {
 const GENE_LABELS = ['reach', 'loneliness limit', 'crowding limit', 'breeding company', 'nursery limit',
   'fertility', 'seed throw', 'throw scatter', 'restlessness', 'sociability', 'diet'];
 
-const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Aggregation', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web'];
+const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Aggregation', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web', 'Two lineages'];
+const DEFAULT_PRESET = PRESET_NAMES.indexOf('Trophic web');   // the scenario a fresh visit opens on (and runs)
 // short, persistent one-liners shown under the preset menu (no hover needed)
 const PRESET_BLURBS = [
   'Tight Life-like rules on a lattice: a near-total crash, then surviving colonies spread back.',
@@ -167,6 +168,7 @@ const PRESET_BLURBS = [
   'Sociable cells with a low crowding limit: packed interiors die, leaving colonies full of holes.',
   'Fast mutation, local breeding and choosy mates: one founder splits into around ten large species.',
   'Energy model on: plants graze the flora, animals evolve to hunt them.',
+  'Two randomized founder lineages start on opposite halves and compete across a front.',
 ];
 
 // ---- side panel -----------------------------------------------------------
@@ -205,7 +207,7 @@ function buildSide() {
   const presetOpts = [['', 'Choose a preset…'], ...PRESET_NAMES.map((n, i) => [String(i), n])];
   side.append(section('Presets', [
     ctrlSelect('scenario', presetOpts, curPreset >= 0 ? String(curPreset) : '', (v) => { if (v !== '') applyPreset(+v); }),
-    el('p', { class: 'hint' }, [curPreset >= 0 ? PRESET_BLURBS[curPreset] : 'A starting scenario. The default scene is two lineages competing for the space.']),
+    el('p', { class: 'hint' }, [curPreset >= 0 ? PRESET_BLURBS[curPreset] : 'A starting scenario.']),
   ]));
 
   // Rules
@@ -517,6 +519,13 @@ const PRESETS = [
     init: { layout: 'uniform', genomeInit: 'brush', population: 3500, spread: 0.05 },
     color: 'trophic',
   },
+  { // Two lineages — the plain sandbox scene: two founder genomes, each randomized
+    // around the default brush, fill opposite halves and compete across the front where
+    // they meet. Everything else at defaults.
+    brush: { rScale: 1.0, sLo: 0.4, sHi: 4.5, bLo: 0.8, bHi: 3.6, fec: 0.22, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10, trophic: 0.5 },
+    P: {},
+    init: {},
+  },
 ];
 // A preset is a whole scenario: every rule and seeding setting starts from the
 // defaults, so the result never depends on what was run before. Only the seed, the
@@ -826,8 +835,14 @@ $('#uitoggle').setAttribute('data-tip', 'Hide the controls and charts — just t
 const fromLink = cfgPart ? applyConfig(cfgPart.slice(4)) : false;   // shared link: settings first, then seed
 buildSide();
 buildBottom();
+// A fresh visit opens on the default scenario, running (unless the viewer prefers
+// reduced motion). A shared link re-seeds its own settings; #preset=N picks another.
 const presetM = devHash.match(/preset=?(\d)/);  // #preset=1 — boot into a preset (dev/testing)
-if (presetM && !fromLink) applyPreset(+presetM[1] - 1); else applyInit();
+if (fromLink) applyInit();
+else {
+  applyPreset(presetM ? +presetM[1] - 1 : DEFAULT_PRESET);   // applyPreset starts playing
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) { ui.playing = false; syncPlayButtons(); }
+}
 if (devHash.includes('genealogy')) ui.colorMode = 'lineage';  // #genealogy — dev/testing
 if (devHash.includes('phenotype')) ui.colorMode = 'phenotype';  // #phenotype — dev/testing
 if (devHash.includes('trophic')) ui.colorMode = 'trophic';    // #trophic — dev/testing
