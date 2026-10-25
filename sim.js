@@ -109,7 +109,8 @@ export function foundGenus(state, genome, off, lineageId, parent) {
 // species that also founded a new genus (a large colour step). Genealogy only.
 export function foundSpecies(state, genome, off, lineageId, parent, genus, big) {
   const id = state.nextSpecies++;
-  state.spRef[id] = copyGenome(genome, off);
+  state.spRef[id] = copyGenome(genome, off);       // follows the members (divergence tests)
+  state.spFounder[id] = copyGenome(genome, off);   // fixed forever (the species' look)
   state.spLineage[id] = lineageId; state.spParent[id] = parent; state.spGenus[id] = genus; state.spBig[id] = big ? 1 : 0;
   return id;
 }
@@ -194,9 +195,9 @@ export function createState(cap) {
     // spatial noise, current level regrows toward it and is grazed by autotrophs.
     field: null, fieldK: null, fieldNX: 0, fieldNY: 0, _fieldW: -1, _fieldH: -1, _fieldSeed: -1,
     // divergence registries (grow): species (fine) and genus (coarse) tiers
-    spRef: [], spParent: [], spLineage: [], spGenus: [], spBig: [], nextSpecies: 0,
+    spRef: [], spFounder: [], spParent: [], spLineage: [], spGenus: [], spBig: [], nextSpecies: 0,
     gRef: [], gParent: [], gLineage: [], nextGenus: 0,
-    _spColor: [],   // renderer-owned color cache, keyed by species id; cleared on reset
+    _spColor: [], _spHash: [],   // renderer-owned caches keyed by species id (genealogy colour, species hash); cleared on reset
     rng: makeRNG(1),
     _scratch: null, _rangesR: -1, _ranges: null,
   };
@@ -204,9 +205,9 @@ export function createState(cap) {
 
 export function resetState(state, seed) {
   state.count = 0; state.tick = 0; state.nextLineage = 1;
-  state.spRef = []; state.spParent = []; state.spLineage = []; state.spGenus = []; state.spBig = []; state.nextSpecies = 0;
+  state.spRef = []; state.spFounder = []; state.spParent = []; state.spLineage = []; state.spGenus = []; state.spBig = []; state.nextSpecies = 0;
   state.gRef = []; state.gParent = []; state.gLineage = []; state.nextGenus = 0;
-  state._spColor = [];
+  state._spColor = []; state._spHash = [];   // renderer caches (genealogy colours, species hashes)
   state._fieldW = -1; state._fieldH = -1; state._fieldSeed = -1;   // force the field to rebuild for the new run
   state.rng = makeRNG(seed >>> 0);
 }
