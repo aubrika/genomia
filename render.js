@@ -71,51 +71,42 @@ export function trophicHSL(genome, base, en, emax) {
   return [hue, 68, light];
 }
 
-// Species hash. A species' reference genome (which follows its members) is binned
-// coarsely, HASH_BINS per gene, and hashed. Each species thus gets an arbitrary but
-// stable identity that changes only when a split founds a new species or when drift
-// carries the reference clearly into another bin. The bins have hysteresis: a gene only
-// moves to a new bin once the reference is HASH_MARGIN of a bin past the edge, so the
-// reference's tick-to-tick jitter near an edge can't make the colour and shape strobe.
-// Bins persist per species in state._spBins (cleared on reset). Colour mode 'hash' and
-// the shapes read it.
-const HASH_BINS = 6, HASH_MARGIN = 0.35;
+// Species hash. A species' FOUNDING genome — recorded when the species is founded and
+// never changed — is binned coarsely (HASH_BINS per gene) and hashed. Since a cell's
+// species never changes either, a cell's colour and shape are as constant as its
+// genome: they differ between species, and change down the generations only when a new
+// species is founded. Hashes are cached per species in state._spHash (cleared on reset).
+// Colour mode 'hash' and the shapes read it.
+const HASH_BINS = 6;
 export function makeSpeciesHasher(state, R) {
-  const ranges = geneRanges(R), memo = new Map();
-  if (!state._spBins) state._spBins = [];
+  const ranges = geneRanges(R);
+  if (!state._spHash) state._spHash = [];
+  const cache = state._spHash;
   const hash = (sp) => {
-    let h = memo.get(sp);
+    let h = cache[sp];
     if (h !== undefined) return h;
-    const ref = state.spRef[sp];
-    let bins = state._spBins[sp];
+    const f = state.spFounder[sp];
     h = 2166136261;
-    if (ref) {
-      if (!bins) bins = state._spBins[sp] = new Int8Array(G).fill(-1);
-      for (let g = 0; g < G; g++) {
-        const u = (ref[g] - ranges[g][0]) / (ranges[g][1] - ranges[g][0]) * HASH_BINS;
-        let q = bins[g];
-        if (q < 0 || u < q - HASH_MARGIN || u > q + 1 + HASH_MARGIN) {
-          q = Math.floor(u); if (q < 0) q = 0; else if (q >= HASH_BINS) q = HASH_BINS - 1;
-          bins[g] = q;
-        }
-        h = Math.imul(h ^ (q + 16 * g), 16777619);
-      }
+    if (f) for (let g = 0; g < G; g++) {
+      let q = Math.floor((f[g] - ranges[g][0]) / (ranges[g][1] - ranges[g][0]) * HASH_BINS);
+      if (q < 0) q = 0; else if (q >= HASH_BINS) q = HASH_BINS - 1;
+      h = Math.imul(h ^ (q + 16 * g), 16777619);
     }
     h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12; h = Math.imul(h, 0x297a2d39); h ^= h >>> 15;
     h >>>= 0;
-    memo.set(sp, h);
+    cache[sp] = h;
     return h;
   };
   hash.ranges = ranges;   // shared with hashHSL so it isn't rebuilt per cell
   return hash;
 }
-// Hash colour: hue, saturation and base lightness from the species hash; each cell's own
-// genome adds a small lightness/saturation shimmer by how it differs from its species'
-// reference, so mutations show as texture within a species.
+// Hash colour: hue, saturation and base lightness from the species hash; each cell adds a
+// small lightness/saturation shimmer by how its own genome differs from its species'
+// founding genome — fixed for the cell's life, but varied between relatives.
 export function hashHSL(state, i, hash) {
-  const h = hash(state.species[i]), ref = state.spRef[state.species[i]], ranges = hash.ranges, base = i * G, GEN = state.genome;
+  const sp = state.species[i], h = hash(sp), f = state.spFounder[sp], ranges = hash.ranges, base = i * G, GEN = state.genome;
   let d = 0;
-  if (ref) for (let g = 0; g < G; g++) d += PW[g] * (GEN[base + g] - ref[g]) / (ranges[g][1] - ranges[g][0]);
+  if (f) for (let g = 0; g < G; g++) d += PW[g] * (GEN[base + g] - f[g]) / (ranges[g][1] - ranges[g][0]);
   const sh = Math.max(-1, Math.min(1, d * 6));
   return [h % 360, 58 + ((h >>> 9) % 22) + 6 * sh, 52 + ((h >>> 17) % 10) + 9 * sh];
 }
@@ -127,9 +118,9 @@ export function hashHSL(state, i, hash) {
 // per-cell rotation from their own genome. 0 sides = circle.
 export const SHAPE_SIDES = [4, 5, 6, 0];
 export function speciesSides(state, sp, hash) {
-  const ref = state.spRef[sp];
-  if (!ref) return 0;
-  if (ref[GENE.align] >= 0.5) return 3;
+  const f = state.spFounder[sp];
+  if (!f) return 0;
+  if (f[GENE.align] >= 0.5) return 3;
   return SHAPE_SIDES[(hash(sp) >>> 24) % SHAPE_SIDES.length];
 }
 // Rotation of the first vertex: a triangle's points along the cell's heading.

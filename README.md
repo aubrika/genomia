@@ -62,11 +62,11 @@ to 0.35R radius), and no two bodies overlap: an offspring that can't find free s
 isn't born, and a blocked move first tries to slide 60° either way before waiting. Each
 cell is drawn at its body size.
 
-By default, cells are coloured by **species hash**: each species' reference genome is
-coarsely binned and hashed into an arbitrary colour, so species look distinct and change
-colour when they drift or split; each cell shimmers by how its own genes differ from its
-species'. The same hash picks each species' **shape** (square, pentagon, hexagon or
-circle).
+By default, cells are coloured by **species hash**: each species' founding genome is
+coarsely binned and hashed into an arbitrary colour, so species look distinct, and a
+cell's colour never changes during its life; new colours appear as new species are
+founded. Each cell shimmers by how its own genes differ from its species' founder. The
+same hash picks each species' **shape** (square, pentagon, hexagon or circle).
 
 Each cell also carries a **heading**, inherited by its offspring. Its **pack instinct**
 gene sets how much it steers by that heading and turns it toward its neighbours'
