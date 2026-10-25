@@ -131,6 +131,34 @@ export function cellRotation(state, i, sides, R) {
   v -= Math.floor(v);
   return v * 6.283185307179586;
 }
+// A species' icon (the leaderboard): its shape and a species-level colour in the current
+// colour mode — the base hash colour without the per-cell shimmer, or the founding
+// genome's phenotype/diet colour — sized by its founder's body-size gene.
+export function speciesIconHSL(state, sp, mode, R, hash) {
+  const f = state.spFounder[sp];
+  if (mode === 'lineage') return speciesHSL(state, sp, hash.ranges);
+  if (mode === 'trophic') return trophicHSL(f, 0, 0, 0);
+  if (mode === 'phenotype') return phenotypeHSL(f, 0, R);
+  const h = hash(sp);
+  return [h % 360, 58 + ((h >>> 9) % 22), 52 + ((h >>> 17) % 10)];
+}
+export function drawSpeciesIcon(ctx, state, sp, mode, R, hash, shapes) {
+  const w = ctx.canvas.width, c = w / 2, f = state.spFounder[sp];
+  ctx.clearRect(0, 0, w, w);
+  if (!f) return;
+  let b = f[GENE.body]; if (b < 0) b = 0; else if (b > 1) b = 1;
+  const r = c * (0.55 + 0.4 * b), sides = shapes ? speciesSides(state, sp, hash) : 0;
+  const rgb = hslToRgb(...speciesIconHSL(state, sp, mode, R, hash));
+  ctx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+  ctx.beginPath();
+  if (sides === 0) ctx.arc(c, c, r, 0, 6.283185307179586);
+  else {
+    const rot = sides === 3 ? -Math.PI / 2 : sides === 4 ? Math.PI / 4 : -Math.PI / 2, step = 6.283185307179586 / sides;
+    for (let k = 0; k < sides; k++) { const a = rot + k * step; k ? ctx.lineTo(c + r * Math.cos(a), c + r * Math.sin(a)) : ctx.moveTo(c + r * Math.cos(a), c + r * Math.sin(a)); }
+    ctx.closePath();
+  }
+  ctx.fill();
+}
 export const SHAPE_NAMES = { 3: 'triangle', 4: 'square', 5: 'pentagon', 6: 'hexagon', 0: 'circle' };
 
 export function hslToRgb(h, s, l) {

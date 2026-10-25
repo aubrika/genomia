@@ -68,6 +68,12 @@ cell's colour never changes during its life; new colours appear as new species a
 founded. Each cell shimmers by how its own genes differ from its species' founder. The
 same hash picks each species' **shape** (square, pentagon, hexagon or circle).
 
+The **leaderboard** ranks the ten species with the most members alive at the same time
+since the last reset, counting related species that share a species hash (and so a
+look) as one. Each row shows the species' shape and colour, its peak and current
+counts, and a silly name (adjective + animal, such as "deciduous fish") picked from its
+species hash. The same name appears in the hover read-out of each cell.
+
 Each cell also carries a **heading**, inherited by its offspring. Its **pack instinct**
 gene sets how much it steers by that heading and turns it toward its neighbours'
 average heading, so neighbours fall into step and travel together as a flock.

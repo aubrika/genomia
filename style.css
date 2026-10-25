@@ -191,3 +191,16 @@ body.collapsed { overflow: hidden; }
   #welcome { padding: 20px 20px 18px; font-size: 15px; }
   #welcome h1 { font-size: 24px; }
 }
+
+/* species leaderboard */
+.board { display: flex; flex-direction: column; gap: 2px; }
+.brow { display: grid; grid-template-columns: 26px 26px 1fr 64px 64px; align-items: center; gap: 10px; padding: 3px 0; font-size: 17px; }
+.brow canvas { width: 26px; height: 26px; }
+.brow .rank { color: var(--muted); text-align: right; }
+.brow .bname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brow .bnum { text-align: right; }
+.brow .bnum.extinct { color: var(--muted); }
+.brow.bhead { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; padding-bottom: 4px; }
+.brow.bhead span:nth-child(4), .brow.bhead span:nth-child(5) { text-align: right; }
+@media (max-width: 1280px) { .brow { font-size: 15px; grid-template-columns: 22px 26px 1fr 54px 54px; gap: 8px; } }
+@media (max-width: 900px) { .brow { font-size: 14px; } }

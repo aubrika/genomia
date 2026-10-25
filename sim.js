@@ -198,6 +198,7 @@ export function createState(cap) {
     spRef: [], spFounder: [], spParent: [], spLineage: [], spGenus: [], spBig: [], nextSpecies: 0,
     gRef: [], gParent: [], gLineage: [], nextGenus: 0,
     _spColor: [], _spHash: [],   // renderer-owned caches keyed by species id (genealogy colour, species hash); cleared on reset
+    _hashPeak: null,   // leaderboard.js: each species hash's peak living count; cleared on reset
     rng: makeRNG(1),
     _scratch: null, _rangesR: -1, _ranges: null,
   };
@@ -208,6 +209,7 @@ export function resetState(state, seed) {
   state.spRef = []; state.spFounder = []; state.spParent = []; state.spLineage = []; state.spGenus = []; state.spBig = []; state.nextSpecies = 0;
   state.gRef = []; state.gParent = []; state.gLineage = []; state.nextGenus = 0;
   state._spColor = []; state._spHash = [];   // renderer caches (genealogy colours, species hashes)
+  state._hashPeak = null;   // leaderboard peaks
   state._fieldW = -1; state._fieldH = -1; state._fieldSeed = -1;   // force the field to rebuild for the new run
   state.rng = makeRNG(seed >>> 0);
 }
