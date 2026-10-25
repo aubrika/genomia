@@ -103,12 +103,16 @@ export function makeSpeciesHasher(state, R) {
 // Hash colour: hue, saturation and base lightness from the species hash; each cell adds a
 // small lightness/saturation shimmer by how its own genome differs from its species'
 // founding genome — fixed for the cell's life, but varied between relatives.
+// A species' base hash colour (no per-cell shimmer): the icons and colour names use it.
+export function hashBaseHSL(h) { return [h % 360, 58 + ((h >>> 9) % 22), 52 + ((h >>> 17) % 10)]; }
 export function hashHSL(state, i, hash) {
   const sp = state.species[i], h = hash(sp), f = state.spFounder[sp], ranges = hash.ranges, base = i * G, GEN = state.genome;
   let d = 0;
   if (f) for (let g = 0; g < G; g++) d += PW[g] * (GEN[base + g] - f[g]) / (ranges[g][1] - ranges[g][0]);
   const sh = Math.max(-1, Math.min(1, d * 6));
-  return [h % 360, 58 + ((h >>> 9) % 22) + 6 * sh, 52 + ((h >>> 17) % 10) + 9 * sh];
+  const c = hashBaseHSL(h);
+  c[1] += 6 * sh; c[2] += 9 * sh;
+  return c;
 }
 
 // Shape. Size is the cell's body (sim.js bodyRadius: the body-size gene). The polygon is
@@ -139,8 +143,7 @@ export function speciesIconHSL(state, sp, mode, R, hash) {
   if (mode === 'lineage') return speciesHSL(state, sp, hash.ranges);
   if (mode === 'trophic') return trophicHSL(f, 0, 0, 0);
   if (mode === 'phenotype') return phenotypeHSL(f, 0, R);
-  const h = hash(sp);
-  return [h % 360, 58 + ((h >>> 9) % 22), 52 + ((h >>> 17) % 10)];
+  return hashBaseHSL(hash(sp));
 }
 export function drawSpeciesIcon(ctx, state, sp, mode, R, hash, shapes) {
   const w = ctx.canvas.width, c = w / 2, f = state.spFounder[sp];

@@ -165,7 +165,7 @@ const HELP = {
   sparkPop: 'Living cell count over time.',
   sparkGene: 'Mean ± standard deviation of the selected gene across the whole population.',
   sparkVar: 'Genetic variance index — mean per-gene variance, normalised by range. The headline number: it collapses under blend inheritance and holds steady under crossover.',
-  board: 'The ten species that reached the most living members at once since the last reset. A species here is a species hash: related species whose founding genomes hash alike share a shape, colour and name, so they count together. Each row shows that shape, its colour in the current colour mode, and a made-up name picked from the hash. peak = the most members alive together; now = how many are alive now († = extinct). Hover a row for details.',
+  board: 'The ten species that reached the most living members at once since the last reset. A species here is a species hash: related species whose founding genomes hash alike share a shape, colour and name, so they count together. Each row shows that shape, its colour in the current colour mode, and a name from the hash: the nearest colour word to its species-hash colour plus an invented creature. peak = the most members alive together; now = how many are alive now († = extinct). Hover a row for details.',
   sparkSpecies: 'Number of distinct surviving species (the fine tier). Rises as genomes diverge past the species threshold and falls as species go extinct. Founder-lineage and genus counts are in the top-left readout.',
   sparkShare: 'Population share of the founder lineages over time, as a stacked band. Watch one lineage competitively exclude the others (a band swallowing the rest) or a stable coexistence hold. Grey = any later-founded lineages lumped together.',
 };
