@@ -26,7 +26,7 @@ export function phenotypeHSL(genome, base, R) {
 // hue jump, so each genus is a distinct colour family; a species split within a
 // genus makes a clear-but-smaller hue+lightness step. Step direction comes from the
 // genome change (not a hash), so related clades cluster in colour and drift step-wise.
-const PW = [0.9, -0.7, 0.6, -0.5, 0.8, 0.4, -0.6, 0.5, -0.8, 1.0, 0.7, -0.9]; // fixed projection weights spread step directions
+const PW = [0.9, -0.7, 0.6, -0.5, 0.8, 0.4, -0.6, 0.5, -0.8, 1.0, 0.7, -0.9, 0.6]; // fixed projection weights spread step directions
 export function speciesHSL(state, sp, ranges) {
   const cache = state._spColor;
   if (cache[sp]) return cache[sp];
@@ -71,19 +71,53 @@ export function trophicHSL(genome, base, en, emax) {
   return [hue, 68, light];
 }
 
-// Shape. Size is the cell's body (sim.js bodyRadius: reach and fertility). The polygon
-// is a per-SPECIES trait read from the species' reference genome, so each species keeps
-// one consistent shape: a species with strong pack instinct (align ≥ 0.5) is a triangle
-// pointing along its heading — you can see which way a pack is going — and otherwise
-// sociability picks square (shuns crowds), pentagon, hexagon or circle (seeks crowds).
-// Other polygons get a per-cell rotation from their own genome. 0 sides = circle.
+// Species hash. A species' reference genome (which follows its members) is binned
+// coarsely, HASH_BINS per gene, and hashed. Each species thus gets an arbitrary but
+// stable identity that changes only when a split founds a new species or when drift
+// carries the reference across a bin. Colour mode 'hash' and the shapes read it.
+const HASH_BINS = 6;
+export function makeSpeciesHasher(state, R) {
+  const ranges = geneRanges(R), memo = new Map();
+  const hash = (sp) => {
+    let h = memo.get(sp);
+    if (h !== undefined) return h;
+    const ref = state.spRef[sp];
+    h = 2166136261;
+    if (ref) for (let g = 0; g < G; g++) {
+      let q = Math.floor((ref[g] - ranges[g][0]) / (ranges[g][1] - ranges[g][0]) * HASH_BINS);
+      if (q < 0) q = 0; else if (q >= HASH_BINS) q = HASH_BINS - 1;
+      h = Math.imul(h ^ (q + 16 * g), 16777619);
+    }
+    h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12; h = Math.imul(h, 0x297a2d39); h ^= h >>> 15;
+    h >>>= 0;
+    memo.set(sp, h);
+    return h;
+  };
+  hash.ranges = ranges;   // shared with hashHSL so it isn't rebuilt per cell
+  return hash;
+}
+// Hash colour: hue, saturation and base lightness from the species hash; each cell's own
+// genome adds a small lightness/saturation shimmer by how it differs from its species'
+// reference, so mutations show as texture within a species.
+export function hashHSL(state, i, hash) {
+  const h = hash(state.species[i]), ref = state.spRef[state.species[i]], ranges = hash.ranges, base = i * G, GEN = state.genome;
+  let d = 0;
+  if (ref) for (let g = 0; g < G; g++) d += PW[g] * (GEN[base + g] - ref[g]) / (ranges[g][1] - ranges[g][0]);
+  const sh = Math.max(-1, Math.min(1, d * 6));
+  return [h % 360, 58 + ((h >>> 9) % 22) + 6 * sh, 52 + ((h >>> 17) % 10) + 9 * sh];
+}
+
+// Shape. Size is the cell's body (sim.js bodyRadius: the body-size gene). The polygon is
+// a per-SPECIES trait: a species with strong pack instinct (align ≥ 0.5) is a triangle
+// pointing along its heading — you can see which way a pack is going — and otherwise the
+// species hash picks a square, pentagon, hexagon or circle. Other polygons get a
+// per-cell rotation from their own genome. 0 sides = circle.
 export const SHAPE_SIDES = [4, 5, 6, 0];
-export function speciesSides(state, sp) {
+export function speciesSides(state, sp, hash) {
   const ref = state.spRef[sp];
   if (!ref) return 0;
   if (ref[GENE.align] >= 0.5) return 3;
-  const k = Math.floor((ref[GENE.taxis] + 1) / 2 * SHAPE_SIDES.length);
-  return SHAPE_SIDES[k < 0 ? 0 : k >= SHAPE_SIDES.length ? SHAPE_SIDES.length - 1 : k];
+  return SHAPE_SIDES[(hash(sp) >>> 24) % SHAPE_SIDES.length];
 }
 // Rotation of the first vertex: a triangle's points along the cell's heading.
 export function cellRotation(state, i, sides, R) {
@@ -214,16 +248,18 @@ export function draw(ctx, state, P, view, opts) {
   const N = state.count, GEN = state.genome, R = P.R;
   ensureColor(state.cap);
   const treeMode = opts.colorMode === 'lineage';
-  const trophicMode = opts.colorMode === 'trophic';
+  const trophicMode = opts.colorMode === 'trophic', hashMode = opts.colorMode === 'hash';
   const ranges = treeMode ? geneRanges(R) : null;
+  const hash = makeSpeciesHasher(state, R);
   const emax = P.energyOn ? P.energyMax : 0, EN = state.energy;
 
   // per-agent RGB for this frame
   for (let i = 0; i < N; i++) {
     const base = i * G;
-    const hsl = treeMode ? speciesHSL(state, state.species[i], ranges)
-      : trophicMode ? trophicHSL(GEN, base, EN[i], emax)
-        : phenotypeHSL(GEN, base, R);
+    const hsl = hashMode ? hashHSL(state, i, hash)
+      : treeMode ? speciesHSL(state, state.species[i], ranges)
+        : trophicMode ? trophicHSL(GEN, base, EN[i], emax)
+          : phenotypeHSL(GEN, base, R);
     const rgb = hslToRgb(hsl[0], hsl[1], hsl[2]);
     rB[i] = rgb[0]; gB[i] = rgb[1]; bB[i] = rgb[2];
   }
@@ -233,7 +269,7 @@ export function draw(ctx, state, P, view, opts) {
   // cells: filled polygons / circles at body size, no stroke
   const X = state.x, Y = state.y, shapes = opts.shapes !== false;
   for (let i = 0; i < N; i++) {
-    const base = i * G, r = bodyRadius(GEN, base, R), sides = shapes ? speciesSides(state, state.species[i]) : 0;
+    const base = i * G, r = bodyRadius(GEN, base, R), sides = shapes ? speciesSides(state, state.species[i], hash) : 0;
     ctx.fillStyle = `rgb(${rB[i]},${gB[i]},${bB[i]})`;
     ctx.beginPath();
     if (sides === 0) ctx.arc(X[i], Y[i], r, 0, 6.283185307179586);

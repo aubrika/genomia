@@ -29,8 +29,8 @@ Opens on the **Trophic web** scenario, running (paused if your system asks for r
 - **Gray goo**: turn metabolic cost off. Tolerance becomes free, so every lineage
   evolves the widest possible survival and breeding windows, the habitat fills to the
   cap, and (in phenotype colour) everything turns grey.
-- **Genealogy colour** (the default): each founder lineage is a hue family, and each
-  species split steps the shade, so the family tree is visible on the habitat.
+- **Genealogy colour**: each founder lineage is a hue family, and each species split
+  steps the shade, so the family tree is visible on the habitat.
 - **Species bloom**: one founder under fast mutation and choosy mating splits into
   around ten large species.
 - **Flocks**: strong pack instinct under a low population limit; the population
@@ -57,12 +57,16 @@ Without that trade-off, every run converges on immortal grey generalists. Specie
 divergence clusters: each species' reference genome follows its members, and an
 offspring that strays past the threshold founds a new one.
 
-Cells have **solid bodies** (toggle: Rules → bodies). Body size reads the reproductive
-strategy (long reach and low fertility make a big body), and no two bodies overlap: an
-offspring that can't find free space isn't born, and a blocked move waits. Each cell is
-drawn at its body size; its **shape** is a species trait read from sociability, from a
-square (shuns crowds) through pentagon and hexagon to a circle (seeks them). A blocked
-move first tries to slide 60° either way, so dense groups still flow.
+Cells have **solid bodies** (toggle: Rules → bodies). Body size is its own gene (0.06R
+to 0.35R radius), and no two bodies overlap: an offspring that can't find free space
+isn't born, and a blocked move first tries to slide 60° either way before waiting. Each
+cell is drawn at its body size.
+
+By default, cells are coloured by **species hash**: each species' reference genome is
+coarsely binned and hashed into an arbitrary colour, so species look distinct and change
+colour when they drift or split; each cell shimmers by how its own genes differ from its
+species'. The same hash picks each species' **shape** (square, pentagon, hexagon or
+circle).
 
 Each cell also carries a **heading**, inherited by its offspring. Its **pack instinct**
 gene sets how much it steers by that heading and turns it toward its neighbours'

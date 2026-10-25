@@ -5,7 +5,7 @@
 // draw() seam; main.js falls back to Canvas2D if WebGL2 is unavailable.
 
 import { G, GENE, geneRanges, bodyRadius } from './sim.js';
-import { phenotypeHSL, speciesHSL, trophicHSL, hslToRgb, makeFlora, sampleField, computePairs, speciesSides, cellRotation } from './render.js';
+import { phenotypeHSL, speciesHSL, trophicHSL, hashHSL, makeSpeciesHasher, hslToRgb, makeFlora, sampleField, computePairs, speciesSides, cellRotation } from './render.js';
 
 const GROUND = [0x12 / 255, 0x10 / 255, 0x0e / 255];
 
@@ -135,14 +135,16 @@ export function createGLRenderer(canvas) {
 
     // per-cell colour (same logic as Canvas2D) → cellCol
     if (cellCol.length < N * 4) cellCol = new Uint8Array(Math.max(N * 4, cellCol.length * 2, 4096));
-    const treeMode = opts.colorMode === 'lineage', trophicMode = opts.colorMode === 'trophic';
+    const treeMode = opts.colorMode === 'lineage', trophicMode = opts.colorMode === 'trophic', hashMode = opts.colorMode === 'hash';
     const ranges = treeMode ? geneRanges(R) : null;
+    const hash = makeSpeciesHasher(state, R);
     const emax = P.energyOn ? P.energyMax : 0, EN = state.energy;
     for (let i = 0; i < N; i++) {
       const base = i * G;
-      const hsl = treeMode ? speciesHSL(state, state.species[i], ranges)
-        : trophicMode ? trophicHSL(GEN, base, EN[i], emax)
-          : phenotypeHSL(GEN, base, R);
+      const hsl = hashMode ? hashHSL(state, i, hash)
+        : treeMode ? speciesHSL(state, state.species[i], ranges)
+          : trophicMode ? trophicHSL(GEN, base, EN[i], emax)
+            : phenotypeHSL(GEN, base, R);
       const rgb = hslToRgb(hsl[0], hsl[1], hsl[2]);
       cellCol[i * 4] = rgb[0]; cellCol[i * 4 + 1] = rgb[1]; cellCol[i * 4 + 2] = rgb[2]; cellCol[i * 4 + 3] = 255;
     }
@@ -163,7 +165,7 @@ export function createGLRenderer(canvas) {
       sSize[i] = d + 2;
       // the shader's polygon has an edge (not a vertex) at its rotation angle: shift by
       // half a sector so vertices land where the Canvas2D renderer puts them
-      const sides = shapes ? speciesSides(state, state.species[i]) : 0;
+      const sides = shapes ? speciesSides(state, state.species[i], hash) : 0;
       sShape[i * 2] = sides; sShape[i * 2 + 1] = sides ? cellRotation(state, i, sides, R) - Math.PI / sides : 0;
     }
     flush(gl.POINTS, N, 1, 0, true, 0, true, 1);
