@@ -20,7 +20,7 @@ python3 -m http.server 8000
 # then open http://localhost:8000/
 ```
 
-Starts paused. **Space** play · **.** step · **R** reset · **H** hide the UI (just the habitat). Choose a scenario from the
+Opens on the **Trophic web** scenario, running (paused if your system asks for reduced motion). **Space** play · **.** step · **R** reset · **H** hide the UI (just the habitat). Choose a scenario from the
 **preset** menu; hover any control to see what it does. **Copy link** shares a run
 (seed, rules, brush and flora pattern) and **snapshot** saves the habitat as a PNG.
 
@@ -33,6 +33,12 @@ Starts paused. **Space** play · **.** step · **R** reset · **H** hide the UI 
   species split steps the shade, so the family tree is visible on the habitat.
 - **Species bloom**: one founder under fast mutation and choosy mating splits into
   around ten large species.
+- **Flocks**: strong pack instinct under a low population limit; the population
+  breaks into groups that move together and hold their course.
+- **Hunting packs**: cooperative hunting (prey only go down when several hunters press
+  them at once) plus pack instinct: omnivorous hunters roam the plant field as
+  travelling packs. Turn pack hunting off and they dwindle; drop the pack instinct
+  and they survive only as stationary clumps.
 - **Trophic web**: switch on the energy model and one lineage grazing the flora
   field evolves predators that hunt it: an emergent food chain (green plants → red
   animals).
@@ -52,7 +58,16 @@ Cells have **solid bodies** (toggle: Rules → bodies). Body size reads the repr
 strategy (long reach and low fertility make a big body), and no two bodies overlap: an
 offspring that can't find free space isn't born, and a blocked move waits. Each cell is
 drawn at its body size; its **shape** is a species trait read from sociability, from a
-triangle (shuns crowds) through square, pentagon and hexagon to a circle (seeks them).
+square (shuns crowds) through pentagon and hexagon to a circle (seeks them). A blocked
+move first tries to slide 60° either way, so dense groups still flow.
+
+Each cell also carries a **heading**, inherited by its offspring. Its **pack instinct**
+gene sets how much it steers by that heading and turns it toward its neighbours'
+average heading, so neighbours fall into step and travel together as a flock.
+Strongly pack-minded species are drawn as triangles pointing the way they're going.
+With the energy model on, **pack hunting** (cooperative hunting) makes a predator's
+bite land in proportion to (total pressure on that prey ÷ a threshold)², capped at 1,
+so lone hunters starve and packs thrive.
 
 ## Controls
 

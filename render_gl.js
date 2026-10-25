@@ -161,7 +161,10 @@ export function createGLRenderer(canvas) {
       sPos[i * 2] = X[i]; sPos[i * 2 + 1] = Y[i];
       sCol[i * 4] = cellCol[i * 4]; sCol[i * 4 + 1] = cellCol[i * 4 + 1]; sCol[i * 4 + 2] = cellCol[i * 4 + 2]; sCol[i * 4 + 3] = 255;
       sSize[i] = d + 2;
-      sShape[i * 2] = shapes ? speciesSides(state, state.species[i]) : 0; sShape[i * 2 + 1] = cellRotation(GEN, base, R);
+      // the shader's polygon has an edge (not a vertex) at its rotation angle: shift by
+      // half a sector so vertices land where the Canvas2D renderer puts them
+      const sides = shapes ? speciesSides(state, state.species[i]) : 0;
+      sShape[i * 2] = sides; sShape[i * 2 + 1] = sides ? cellRotation(state, i, sides, R) - Math.PI / sides : 0;
     }
     flush(gl.POINTS, N, 1, 0, true, 0, true, 1);
 

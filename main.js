@@ -18,21 +18,26 @@ const freshFieldSeed = () => { fieldNonce = (fieldNonce + 0x9e3779b1) >>> 0; ret
 let pinnedFieldSeed = null;   // set by a shared link: the next reset reuses that flora pattern instead
 const view = { scale: 1, ox: 0, oy: 0 };
 const ui = { playing: false, colorMode: 'lineage', showLines: true, shapes: true, lineCap: 20000, hovered: -1 };
-const INIT_DEFAULTS = { population: 10000, layout: 'uniform', k: 6, genomeInit: 'tworand', spread: 0.03, blobN: 60, blobJitter: 26, seed: 12345 };
+const INIT_DEFAULTS = { population: 10000, layout: 'uniform', k: 6, genomeInit: 'tworand', spread: 0.03, packs: 6, packSize: 40, blobN: 60, blobJitter: 26, seed: 12345 };
 const init = Object.assign({}, INIT_DEFAULTS);
 let selGene = GENE.step;
 let curPreset = -1;   // index of the last-applied preset (-1 = the default two-lineage scene)
 
 // default brush = a viable "aggregator" so the sandbox is alive on first play
 const brush = new Float32Array(G);
-function setBrush(spec) {
-  brush[GENE.rScale] = spec.rScale; brush[GENE.sLo] = spec.sLo; brush[GENE.sHi] = spec.sHi;
-  brush[GENE.bLo] = spec.bLo; brush[GENE.bHi] = spec.bHi; brush[GENE.fecundity] = spec.fec;
-  brush[GENE.dDisp] = spec.dDisp * P.R; brush[GENE.dCV] = spec.dCV;
-  brush[GENE.step] = spec.step * P.R; brush[GENE.taxis] = spec.taxis;
-  if (spec.trophic != null) brush[GENE.trophic] = spec.trophic;
-  brushDirty = true;
+// Write a preset-style spec (dispersal and motility in units of R) into a genome.
+function specInto(g, spec) {
+  g[GENE.rScale] = spec.rScale; g[GENE.sLo] = spec.sLo; g[GENE.sHi] = spec.sHi;
+  g[GENE.bLo] = spec.bLo; g[GENE.bHi] = spec.bHi; g[GENE.fecundity] = spec.fec;
+  g[GENE.dDisp] = spec.dDisp * P.R; g[GENE.dCV] = spec.dCV;
+  g[GENE.step] = spec.step * P.R; g[GENE.taxis] = spec.taxis;
+  if (spec.trophic != null) g[GENE.trophic] = spec.trophic;
+  if (spec.align != null) g[GENE.align] = spec.align;
+  return g;
 }
+function setBrush(spec) { specInto(brush, spec); brushDirty = true; }
+// A preset's second founder genome (the packs in 'prey + packs' seeding); null otherwise.
+let brushB = null;
 
 // A "lineage" is a founder identity = a distinct brush/ruleset. Cells painted with
 // the same (unchanged) brush share a lineage; edit any gene and the next cells you
@@ -48,7 +53,7 @@ function brushFounder() {
   }
   return { lineage: curLineage, species: curSpecies };
 }
-setBrush({ rScale: 1.0, sLo: 0.4, sHi: 4.5, bLo: 0.8, bHi: 3.6, fec: 0.22, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10, trophic: 0.5 });
+setBrush({ rScale: 1.0, sLo: 0.4, sHi: 4.5, bLo: 0.8, bHi: 3.6, fec: 0.22, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10, trophic: 0.5, align: 0 });
 
 const geneR = () => geneRanges(P.R);
 
@@ -94,8 +99,9 @@ const HELP = {
   dDisp: 'Seed throw (dDisp)\n\nHow far from the parent its offspring land. Short throws reinforce the local cluster; long throws colonise gaps and new ground.\n\nHow it works: offspring are placed in a random direction at distance |throw × (1 + scatter × N(0,1))|, where N is a standard normal draw. Range 0.2R–3R, in world units. It scales with R, so it stays proportional when the window resizes.',
   dCV: 'Throw scatter (dCV)\n\nHow consistent the seed throw is. At 0, every offspring lands at exactly the throw distance; higher values spread them anywhere from close by to far away.\n\nHow it works: the coefficient of variation of the throw distance. Distance = |throw × (1 + scatter × N(0,1))|. Range 0–1.',
   step: 'Restlessness (step)\n\nHow far this cell moves each tick. Sessile cells hold their ground; restless ones roam and mix.\n\nHow it works: each tick the cell moves exactly this distance, in a direction mixed from a random heading and its sociability steering. Range 0–0.3R, in world units, scaled with R. Costs kMove × (restlessness/R)².',
-  taxis: 'Sociability (taxis)\n\nWhether this cell drifts toward company or away from it. +1 = seeks crowds (aggregates into clumps), −1 = shuns them (spreads out), 0 = wanders at random.\n\nHow it works: direction = (1 − |s|) × random heading + s × ĝ, normalised, where ĝ points up the local crowding gradient (toward denser neighbours, within reach). Range −1 to +1. Costs kTaxis × sociability². Its species’ average sociability sets the drawn shape: triangle (shuns) → square → pentagon → hexagon → circle (seeks).',
+  taxis: 'Sociability (taxis)\n\nWhether this cell drifts toward company or away from it. +1 = seeks crowds (aggregates into clumps), −1 = shuns them (spreads out), 0 = wanders at random.\n\nHow it works: direction = (1 − |s|) × random heading + s × ĝ, normalised, where ĝ points up the local crowding gradient (toward denser neighbours, within reach). Range −1 to +1. Costs kTaxis × sociability². Its species’ average sociability sets the drawn shape: square (shuns) → pentagon → hexagon → circle (seeks); strongly pack-minded species are triangles instead.',
   trophic: 'Diet (trophic)\n\nWhat this cell eats when the energy model is on. 0 = pure “plant”: grazes the resource field. 1 = pure “animal”: preys on neighbouring cells. Has no effect while the energy model is off.\n\nHow it works: grazing efficiency = (1 − diet)^p and hunting efficiency = diet^p, where p is the specialization rule. When p > 1, generalists are worse at both, so selection pushes lineages to the extremes. A hunter drains predation × its efficiency × closeness × (1 − the prey’s hunting efficiency) from each neighbour in reach per tick, and keeps a predGain share of it. Cells with diet ≥ 0.5 count as animals. Range 0–1.',
+  align: 'Pack instinct (align)\n\nHow much this cell travels with its neighbours. At 0 it wanders on a fresh random heading every tick. Higher, it keeps a heading of its own and turns it toward the average heading of the cells around it, so neighbours fall into step and the group moves as one: a flock, school or hunting pack. Offspring inherit their parent’s heading.\n\nHow it works: each tick, heading ← (1 − a)·own + a·(kernel-weighted mean of neighbours’ headings within reach), then jittered by ±heading noise. The move direction blends a random heading (weight 1 − a) with that heading (weight a), then sociability’s pull as usual. Range 0–1. Costs kAlign × a². Species with pack instinct ≥ 0.5 are drawn as triangles pointing where they are going.',
   sigma: 'Band-edge softness. Birth/death thresholds are fuzzy, not hard: σ is the half-width of the smooth transition around each bound. Small σ ≈ crisp, Conway-like rules; large σ = gradual.',
   maxAgeToggle: 'When on, cells also die of old age once they pass "max age". Off by default — death is otherwise purely density-driven.',
   maxAge: 'Ticks a cell can live before dying of old age (only when max-age death is on).',
@@ -106,6 +112,8 @@ const HELP = {
   kSense: 'Cost weight on reach: adds kSense × reach² to a cell’s cost. Higher makes sensing far more expensive.',
   kTolDeath: 'Generalist death: the extra chance per tick of dying for a cell whose survival window spans the whole crowding range (0–6), scaled down linearly for narrower windows. It is the trade-off that stops every lineage from evolving into an immortal generalist: a wide window survives more conditions but dies more often in all of them. Applies while metabolic cost is on and the energy model is off (the energy model has its own upkeep).',
   kTol: 'Cost weight on tolerance: adds kTol × (width of the survival window + width of the breeding window)/12 to a cell’s cost. Higher makes tolerating a wide range of crowding more expensive.',
+  kAlign: 'Cost weight on pack instinct: adds kAlign × (pack instinct)² to a cell’s cost. Higher makes travelling in step with neighbours more expensive.',
+  headNoise: 'Heading noise: how much a steering cell’s heading wobbles each tick (± this many radians). Low = long straight runs and tight, purposeful packs; high = packs lose their bearing. Only matters for cells with pack instinct.',
   kTaxis: 'Cost weight on sociability: adds kTaxis × sociability² to a cell’s cost. Higher makes deliberate steering (toward or away from crowds) more expensive.',
   recomb: 'How offspring inherit genes. clonal = copy one parent. crossover = mix two nearby parents gene-by-gene. blend = average two parents (this halves genetic variance every generation — included to demonstrate evolutionary collapse).',
   mutation: 'gaussian = each gene is randomly nudged with probability μ. cornered = same, but the four threshold genes (loneliness limit, crowding limit, breeding company, nursery limit) are also pulled toward the ends of their range, resisting a mushy middle where no structure survives.',
@@ -122,11 +130,12 @@ const HELP = {
   fieldRegrow: 'How fast the resource field refills toward its local capacity each tick ("sunlight"). Low = grazed patches stay bare for a while, so autotrophs must spread out; high = food comes back fast.',
   autoGain: 'Autotroph harvest rate: energy a pure plant gains per tick sitting on a full field cell. Raise it to make photosynthesis pay better and plants dominate.',
   predRate: 'Predation rate: energy a pure animal drains from a neighbour per tick. Raise it to make hunting pay better and animals dominate (until they eat all the plants).',
+  huntThreshold: 'Cooperative hunting. 0 = off: every predator drains its prey on its own. Above 0, prey can only be brought down together: a predator’s bite lands in proportion to (total predation pressure on that prey ÷ this threshold)², capped at 1. A lone hunter at a third of the threshold lands about 11% of its bite; a pack that reaches it lands all of it. This is what makes hunting in packs pay (pair it with pack instinct). Only cells with a real predation ability count as hunters.',
   trophicExp: 'Specialization curve. 1 = a generalist is as good as a specialist (no split). Above 1, being half-plant-half-animal is inefficient, so disruptive selection pushes cells to the pure-plant and pure-animal extremes — the cleaner the split.',
   upkeep: 'Base metabolic energy drained every tick, regardless of genome. Higher = cells starve sooner and must feed more actively.',
   geneCost: 'Extra upkeep charged per unit of genome complexity (long reach, high restlessness, wide survival/breeding windows, strong sociability). This is the "greater features cost more food" term — elaborate cells must out-feed simple ones to survive.',
   birthCost: 'Energy a parent invests into each offspring (the child starts life with it). A cell must bank ~1.4× this to breed, so reproduction is a real energy decision, not free.',
-  shapes: 'Cell shapes. Each cell is drawn at its body size (bigger for long reach and low fertility). Its polygon is set by its SPECIES’ sociability: triangle = shuns crowds, then square, pentagon, hexagon, up to circle = seeks crowds. Rotation is individual. OFF draws every cell as a circle (still at body size).',
+  shapes: 'Cell shapes. Each cell is drawn at its body size (bigger for long reach and low fertility). Its polygon is a SPECIES trait: species with strong pack instinct are triangles pointing the way they are heading; otherwise sociability picks square (shuns crowds), pentagon, hexagon or circle (seeks crowds). OFF draws every cell as a circle (still at body size).',
   bodies: 'Solid bodies. When ON, every cell occupies its drawn body: an offspring can’t land on another cell (it tries a few directions, else the birth fails), and a move that would overlap another cell is skipped that tick. Bigger bodies therefore claim more room. OFF = the old point-particle physics, where cells can pile up anywhere.',
   lines: 'Draw a link between cells that perceive each other. Solid = mutual perception, dashed = one-way (a real consequence of different rScale). Line opacity follows perception strength, so links fade in and out as cells drift.',
   seed: 'Random seed. The same seed plus the same parameters reproduces a run exactly — in the same window size, since the habitat scales with the window. (The resource field is re-randomized on every reset, so trophic runs vary each time; a shared link pins it.)',
@@ -154,9 +163,10 @@ const HELP = {
 // Friendly on-screen names for the genes. The code names (GENE_NAMES) stay the
 // vocabulary of sim.js, shared links and the tooltips' first line.
 const GENE_LABELS = ['reach', 'loneliness limit', 'crowding limit', 'breeding company', 'nursery limit',
-  'fertility', 'seed throw', 'throw scatter', 'restlessness', 'sociability', 'diet'];
+  'fertility', 'seed throw', 'throw scatter', 'restlessness', 'sociability', 'diet', 'pack instinct'];
 
-const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Aggregation', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web'];
+const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Aggregation', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web', 'Two lineages', 'Flocks', 'Hunting packs'];
+const DEFAULT_PRESET = PRESET_NAMES.indexOf('Trophic web');   // the scenario a fresh visit opens on (and runs)
 // short, persistent one-liners shown under the preset menu (no hover needed)
 const PRESET_BLURBS = [
   'Tight Life-like rules on a lattice: a near-total crash, then surviving colonies spread back.',
@@ -167,6 +177,9 @@ const PRESET_BLURBS = [
   'Sociable cells with a low crowding limit: packed interiors die, leaving colonies full of holes.',
   'Fast mutation, local breeding and choosy mates: one founder splits into around ten large species.',
   'Energy model on: plants graze the flora, animals evolve to hunt them.',
+  'Two randomized founder lineages start on opposite halves and compete across a front.',
+  'Strong pack instinct under a low population limit: cells fall into step and travel as flocks.',
+  'Cooperative hunting: predators (triangles) only bring down prey together, so they hunt in packs.',
 ];
 
 // ---- side panel -----------------------------------------------------------
@@ -205,7 +218,7 @@ function buildSide() {
   const presetOpts = [['', 'Choose a preset…'], ...PRESET_NAMES.map((n, i) => [String(i), n])];
   side.append(section('Presets', [
     ctrlSelect('scenario', presetOpts, curPreset >= 0 ? String(curPreset) : '', (v) => { if (v !== '') applyPreset(+v); }),
-    el('p', { class: 'hint' }, [curPreset >= 0 ? PRESET_BLURBS[curPreset] : 'A starting scenario. The default scene is two lineages competing for the space.']),
+    el('p', { class: 'hint' }, [curPreset >= 0 ? PRESET_BLURBS[curPreset] : 'A starting scenario.']),
   ]));
 
   // Rules
@@ -217,6 +230,7 @@ function buildSide() {
     slider('softness σ', 0, 2, 0.05, () => P.sigma, (v) => P.sigma = v, f2, HELP.sigma),
     el('div', { class: 'row' }, [ageBtn]),
     slider('max age', 50, 2000, 10, () => P.maxAge, (v) => P.maxAge = v, (v) => v.toFixed(0), HELP.maxAge),
+    (() => { const r = slider('heading noise', 0, 1.5, 0.05, () => P.headNoise, (v) => P.headNoise = v, f2, HELP.headNoise); r.classList.add('stack'); return r; })(),
     slider('max pop', 1000, MAXCAP, 1000, () => P.cap, (v) => { P.cap = v; syncPopMax(); }, kfmt, HELP.maxPop),
     el('div', { class: 'row' }, [capBtn, bodiesBtn]),
   ], 'live'));
@@ -232,6 +246,7 @@ function buildSide() {
     slider('kTol', 0, 2, 0.05, () => P.kTol, (v) => P.kTol = v, f2, HELP.kTol),
     (() => { const r = slider('generalist death', 0, 0.15, 0.005, () => P.kTolDeath, (v) => P.kTolDeath = v, (v) => v.toFixed(3), HELP.kTolDeath); r.classList.add('stack'); return r; })(),
     slider('kTaxis', 0, 2, 0.05, () => P.kTaxis, (v) => P.kTaxis = v, f2, HELP.kTaxis),
+    slider('kAlign', 0, 2, 0.05, () => P.kAlign, (v) => P.kAlign = v, f2, HELP.kAlign),
   ], 'live'));
 
   // Trophic / energy
@@ -245,6 +260,7 @@ function buildSide() {
     slider('field regrow', 0, 0.3, 0.005, () => P.fieldRegrow, (v) => P.fieldRegrow = v, (v) => v.toFixed(3), HELP.fieldRegrow),
     slider('autotroph gain', 0, 1.5, 0.02, () => P.autoGain, (v) => P.autoGain = v, f2, HELP.autoGain),
     slider('predation', 0, 1.5, 0.02, () => P.predRate, (v) => P.predRate = v, f2, HELP.predRate),
+    (() => { const r = slider('pack hunting', 0, 2, 0.05, () => P.huntThreshold, (v) => P.huntThreshold = v, f2, HELP.huntThreshold); r.classList.add('stack'); return r; })(),
     slider('specialization', 1, 4, 0.05, () => P.trophicExp, (v) => P.trophicExp = v, f2, HELP.trophicExp),
     slider('upkeep', 0, 0.3, 0.005, () => P.upkeep, (v) => P.upkeep = v, (v) => v.toFixed(3), HELP.upkeep),
     slider('feature cost', 0, 0.5, 0.01, () => P.geneCost, (v) => P.geneCost = v, f2, HELP.geneCost),
@@ -296,7 +312,7 @@ function buildSide() {
   side.append(section('Initialize', [
     popRow,
     ctrlSelect('layout', [['uniform', 'uniform'], ['blob', 'central blob'], ['kblobs', 'k blobs'], ['ring', 'ring'], ['lattice', 'jittered lattice']], init.layout, (v) => init.layout = v, HELP.layout),
-    ctrlSelect('genome', [['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B'], ['tworand', 'two random']], init.genomeInit, (v) => init.genomeInit = v, HELP.genomeInit),
+    ctrlSelect('genome', [['brush', 'clone brush'], ['uniform', 'uniform random'], ['twoclone', 'two clones A/B'], ['tworand', 'two random'], ['packs', 'prey + packs']], init.genomeInit, (v) => init.genomeInit = v, HELP.genomeInit),
     slider('spread', 0, 0.15, 0.005, () => init.spread, (v) => init.spread = v, (v) => v.toFixed(3), HELP.spread),
     button('apply init', applyInit, '', HELP.applyInit),
   ], 'reset'));
@@ -430,7 +446,7 @@ function applyInit() {
   state.energy0 = P.energyMax * 0.5;
   P.fieldSeed = pinnedFieldSeed != null ? pinnedFieldSeed : freshFieldSeed();   // a new flora pattern each reset
   pinnedFieldSeed = null;
-  const founder = seedPopulation(state, P, init, brush);
+  const founder = seedPopulation(state, P, init, brush, brushB);
   // the brush belongs to the seeded founder (if any), so painting with it unchanged
   // extends that lineage; otherwise the next placement founds anew
   if (founder) { curLineage = founder.lineage; curSpecies = founder.species; brushDirty = false; }
@@ -482,8 +498,8 @@ const PRESETS = [
     // population thins, then regrows as dense colonies that drift and merge; by ~2000
     // ticks usually 1–4 remain (sometimes up to ~8, still merging).
     brush: { rScale: 1.0, sLo: 0.22, sHi: 6.0, bLo: 0.4, bHi: 2.93, fec: 0.27, dDisp: 0.5, dCV: 0.3, step: 0.29, taxis: 0.67 },
-    P: { mu: 0.05, cap: 4000 },
-    init: { layout: 'uniform', genomeInit: 'brush', population: 3500 },
+    P: { mu: 0.05, cap: 3500 },
+    init: { layout: 'uniform', genomeInit: 'brush', population: 3000 },
   },
   { // Allee frontier — one colony with a high loneliness limit: cells that stray from
     // the group die, so the colony grows only at its edge, as a front that sweeps the
@@ -517,6 +533,36 @@ const PRESETS = [
     init: { layout: 'uniform', genomeInit: 'brush', population: 3500, spread: 0.05 },
     color: 'trophic',
   },
+  { // Two lineages — the plain sandbox scene: two founder genomes, each randomized
+    // around the default brush, fill opposite halves and compete across the front where
+    // they meet. Everything else at defaults.
+    brush: { rScale: 1.0, sLo: 0.4, sHi: 4.5, bLo: 0.8, bHi: 3.6, fec: 0.22, dDisp: 1.3, dCV: 0.4, step: 0.10, taxis: 0.10, trophic: 0.5 },
+    P: {},
+    init: {},
+  },
+  { // Flocks — strong pack instinct (align 0.9) and mild sociability under a low
+    // population limit: the population breaks into ~20–30 groups of ~100 that move
+    // ~3x faster than without alignment and hold their course (direction persistence
+    // ~0.7 vs ~0.2). Low mutation keeps the instinct from eroding under its cost.
+    brush: { rScale: 1.0, sLo: 0.4, sHi: 4.5, bLo: 0.8, bHi: 3.6, fec: 0.22, dDisp: 0.6, dCV: 0.3, step: 0.2, taxis: 0.2, align: 0.9 },
+    P: { cap: 3000, headNoise: 0.1, mu: 0.03 },
+    init: { genomeInit: 'brush', population: 2500 },
+  },
+  { // Hunting packs — the Trophic web's plants plus five packs of omnivorous hunters
+    // (diet 0.73) with strong pack instinct, under cooperative hunting: a bite only lands
+    // fully when enough hunters press the same prey. Hunters persist as ~15–20 travelling
+    // packs of ~20–40 that hold their course; with cooperative hunting off they dwindle
+    // to a few dozen, and without pack instinct they survive only as stationary clumps.
+    brush: { rScale: 1.0, sLo: 0.0, sHi: 6.0, bLo: 0.2, bHi: 6.0, fec: 0.5, dDisp: 0.45, dCV: 0.4, step: 0.06, taxis: 0.3, trophic: 0.05 },
+    brushB: { rScale: 0.96, sLo: 0.27, sHi: 5.1, bLo: 1.04, bHi: 5.68, fec: 0.056, dDisp: 0.6, dCV: 0.3, step: 0.09, taxis: 0.25, trophic: 0.73, align: 0.94 },
+    P: {
+      costsOn: true, recomb: 'crossover', mutation: 'gaussian', sigma: 0.3, mu: 0.02, sigmaG: 0.06, macroRate: 0.004, headNoise: 0.14,
+      energyOn: true, fieldContrast: 0.8, fieldRegrow: 0.20, autoGain: 1.1, predRate: 1.06, predGain: 0.88, trophicExp: 1.9, upkeep: 0.009, geneCost: 0.03, birthCost: 2.17,
+      isolation: 0.3, huntThreshold: 0.75,
+    },
+    init: { genomeInit: 'packs', population: 3500, spread: 0.03, packs: 5, packSize: 33 },
+    color: 'trophic',
+  },
 ];
 // A preset is a whole scenario: every rule and seeding setting starts from the
 // defaults, so the result never depends on what was run before. Only the seed, the
@@ -526,7 +572,8 @@ function applyPreset(i) {
   curPreset = i;
   const keep = { worldW: P.worldW, worldH: P.worldH, R: P.R, fieldSeed: P.fieldSeed };
   Object.assign(P, DEFAULTS, keep, pr.P);
-  setBrush(Object.assign({ trophic: 0.5 }, pr.brush));
+  setBrush(Object.assign({ trophic: 0.5, align: 0 }, pr.brush));
+  brushB = pr.brushB ? specInto(new Float32Array(G), Object.assign({ trophic: 0.5, align: 0 }, pr.brushB)) : null;
   Object.assign(init, INIT_DEFAULTS, { seed: init.seed, blobN: init.blobN, blobJitter: init.blobJitter }, pr.init);
   ui.colorMode = pr.color || 'lineage';
   buildSide();
@@ -589,6 +636,7 @@ function resize() {
     }
   }
   brush[GENE.dDisp] *= s; brush[GENE.step] *= s;   // keep the brush R-relative too
+  if (brushB) { brushB[GENE.dDisp] *= s; brushB[GENE.step] *= s; }
   P.R = newR; P._rangesR = -1;                      // force sim to recompute gene ranges
   if (P.energyOn) { if (P.fieldSeed == null) P.fieldSeed = freshFieldSeed(); buildField(state, P); } // rebuild at new dims, same pattern
   if (oldW && s !== 1) buildSide();   // brush sliders read R-relative genes
@@ -618,7 +666,7 @@ function eraseAt(wx, wy) {
     if (dx * dx + dy * dy < r2) {
       const last = --state.count;
       state.x[i] = state.x[last]; state.y[i] = state.y[last]; state.age[i] = state.age[last];
-      state.lineage[i] = state.lineage[last]; state.species[i] = state.species[last]; state.energy[i] = state.energy[last];
+      state.lineage[i] = state.lineage[last]; state.species[i] = state.species[last]; state.energy[i] = state.energy[last]; state.heading[i] = state.heading[last];
       const a = i * G, b = last * G; for (let g = 0; g < G; g++) state.genome[a + g] = state.genome[b + g];
     } else i++;
   }
@@ -695,6 +743,7 @@ function encodeConfig() {
     v: 1, seed: init.seed, fs: P.fieldSeed >>> 0, p,
     init: Object.fromEntries(Object.entries(init).map(([k, v]) => [k, short(v)])),
     b: Array.from(brush, (v, g) => short(R_RELATIVE(g) ? v / P.R : v)),
+    b2: brushB ? Array.from(brushB, (v, g) => short(R_RELATIVE(g) ? v / P.R : v)) : undefined,
     c: ui.colorMode, l: ui.showLines ? 1 : 0, sh: ui.shapes ? 1 : 0, pr: curPreset,
   };
   return btoa(JSON.stringify(cfg)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -709,9 +758,15 @@ function applyConfig(str) {
   if (cfg.init && typeof cfg.init === 'object') for (const k in cfg.init) if (Object.hasOwn(init, k) && sameType(cfg.init[k], init[k])) init[k] = cfg.init[k];
   if (Number.isFinite(cfg.seed)) init.seed = cfg.seed | 0;
   if (Number.isFinite(cfg.fs)) pinnedFieldSeed = cfg.fs >>> 0;
+  // links from before the alignment gene carry 11 brush genes: pad with alignment 0
+  if (Array.isArray(cfg.b) && cfg.b.length === G - 1) cfg.b = cfg.b.concat([0]);
   if (Array.isArray(cfg.b) && cfg.b.length === G && cfg.b.every(Number.isFinite)) {
     for (let g = 0; g < G; g++) brush[g] = R_RELATIVE(g) ? cfg.b[g] * P.R : cfg.b[g];
     markBrushDirty();
+  }
+  if (Array.isArray(cfg.b2) && cfg.b2.length === G && cfg.b2.every(Number.isFinite)) {
+    brushB = new Float32Array(G);
+    for (let g = 0; g < G; g++) brushB[g] = R_RELATIVE(g) ? cfg.b2[g] * P.R : cfg.b2[g];
   }
   if (['phenotype', 'lineage', 'trophic'].includes(cfg.c)) ui.colorMode = cfg.c;
   if (cfg.l === 0 || cfg.l === 1) ui.showLines = !!cfg.l;
@@ -826,8 +881,14 @@ $('#uitoggle').setAttribute('data-tip', 'Hide the controls and charts — just t
 const fromLink = cfgPart ? applyConfig(cfgPart.slice(4)) : false;   // shared link: settings first, then seed
 buildSide();
 buildBottom();
-const presetM = devHash.match(/preset=?(\d)/);  // #preset=1 — boot into a preset (dev/testing)
-if (presetM && !fromLink) applyPreset(+presetM[1] - 1); else applyInit();
+// A fresh visit opens on the default scenario, running (unless the viewer prefers
+// reduced motion). A shared link re-seeds its own settings; #preset=N picks another.
+const presetM = devHash.match(/preset=?(\d+)/);  // #preset=1 — boot into a preset (dev/testing)
+if (fromLink) applyInit();
+else {
+  applyPreset(presetM ? +presetM[1] - 1 : DEFAULT_PRESET);   // applyPreset starts playing
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) { ui.playing = false; syncPlayButtons(); }
+}
 if (devHash.includes('genealogy')) ui.colorMode = 'lineage';  // #genealogy — dev/testing
 if (devHash.includes('phenotype')) ui.colorMode = 'phenotype';  // #phenotype — dev/testing
 if (devHash.includes('trophic')) ui.colorMode = 'trophic';    // #trophic — dev/testing
