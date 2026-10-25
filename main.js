@@ -17,7 +17,12 @@ let fieldNonce = Date.now() >>> 0;
 const freshFieldSeed = () => { fieldNonce = (fieldNonce + 0x9e3779b1) >>> 0; return fieldNonce; };
 let pinnedFieldSeed = null;   // set by a shared link: the next reset reuses that flora pattern instead
 const view = { scale: 1, ox: 0, oy: 0 };
-const ui = { playing: false, colorMode: 'lineage', showLines: true, shapes: true, lineCap: 20000, hovered: -1 };
+const ui = { playing: false, speed: 1, colorMode: 'lineage', showLines: true, shapes: true, lineCap: 20000, hovered: -1 };
+// Fast-forward: simulation ticks per drawn frame. 'max' (Infinity) runs as many as fit
+// in the frame's time budget; every speed is capped by that budget so the page stays
+// responsive on slow machines.
+const SPEEDS = [1, 2, 4, 8, 16, Infinity], SPEED_LABELS = ['1×', '2×', '4×', '8×', '16×', 'max'];
+const STEP_BUDGET_MS = 40;
 const INIT_DEFAULTS = { population: 10000, layout: 'uniform', k: 6, genomeInit: 'tworand', spread: 0.03, packs: 6, packSize: 40, blobN: 60, blobJitter: 26, seed: 12345 };
 const init = Object.assign({}, INIT_DEFAULTS);
 let selGene = GENE.step;
@@ -142,6 +147,7 @@ const HELP = {
   share: 'Copy a link that re-creates this run from tick 0 with the current settings: seed, rules, brush, initializer, colour mode and flora pattern. Best reproduced in a similar window size.',
   snapshot: 'Download the habitat as a PNG image (at your screen’s full resolution).',
   play: 'Run or pause the simulation. (Space)',
+  speed: 'Fast-forward: simulation ticks per drawn frame. Higher speeds make long evolutionary runs watchable; "max" runs as many ticks as fit in each frame. Every speed is capped so the page stays responsive, so very large populations may run slower than the label. ([ slower, ] faster)',
   stepBtn: 'Advance exactly one tick. (.)',
   reset: 'Clear and re-seed the population using the Initialize settings below. (R)',
   population: 'How many cells to place when seeding.',
@@ -165,7 +171,7 @@ const HELP = {
 const GENE_LABELS = ['reach', 'loneliness limit', 'crowding limit', 'breeding company', 'nursery limit',
   'fertility', 'seed throw', 'throw scatter', 'restlessness', 'sociability', 'diet', 'pack instinct'];
 
-const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Aggregation', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web', 'Two lineages', 'Flocks', 'Hunting packs'];
+const PRESET_NAMES = ['Conway-ish', 'Gray goo', 'Blend collapse', 'Aggregation', 'Allee frontier', 'Membranes', 'Species bloom', 'Trophic web', 'Two lineages', 'Flocks', 'Hunting packs', 'Coevolution'];
 const DEFAULT_PRESET = PRESET_NAMES.indexOf('Trophic web');   // the scenario a fresh visit opens on (and runs)
 // short, persistent one-liners shown under the preset menu (no hover needed)
 const PRESET_BLURBS = [
@@ -180,6 +186,7 @@ const PRESET_BLURBS = [
   'Two randomized founder lineages start on opposite halves and compete across a front.',
   'Strong pack instinct under a low population limit: cells fall into step and travel as flocks.',
   'Cooperative hunting: predators (triangles) only bring down prey together, so they hunt in packs.',
+  'Evolve it yourself: cooperative hunting, no pack instinct to start. Over ~5–10k ticks the plants usually evolve herds (watch the gene chart; they turn into triangles) and hunters sometimes evolve packs. Runs at max speed.',
 ];
 
 // ---- side panel -----------------------------------------------------------
@@ -206,6 +213,11 @@ function buildSide() {
   playBtn.id = 'playbtn';
   side.append(section('Simulation', [
     el('div', { class: 'seg' }, [playBtn, button('▷ step', () => singleStep(), '', HELP.stepBtn), button('⟲ reset', () => applyInit(), '', HELP.reset)]),
+    withTip(el('div', { class: 'seg speed' }, SPEEDS.map((v, k) => {
+      const b = button(SPEED_LABELS[k], () => setSpeed(v), ui.speed === v ? 'on' : '');
+      b.dataset.speed = String(k);
+      return b;
+    })), HELP.speed),
     withTip(el('div', { class: 'row' }, [el('label', { class: 'k' }, ['seed']), (() => {
       const inp = el('input', { type: 'text' }); inp.value = init.seed;
       inp.addEventListener('change', () => { init.seed = parseInt(inp.value, 10) || 0; });
@@ -563,6 +575,21 @@ const PRESETS = [
     init: { genomeInit: 'packs', population: 3500, spread: 0.03, packs: 5, packSize: 33 },
     color: 'trophic',
   },
+  { // Coevolution — the Trophic web, plus cooperative hunting (0.75) and mate choice
+    // (isolation 0.3, so hunters and plants keep separate gene pools). Nobody starts with
+    // pack instinct. In 6 of 6 test runs the plants' mean pack instinct rose from ~0.02 to
+    // 0.59–0.84 within 10,000 ticks (herding under predation; without cooperative hunting
+    // it stays 0.15–0.30); hunters' rose above 0.4 in 4 of 6, though they rarely formed
+    // coherent travelling packs. Opens on the pack instinct chart, at max speed.
+    brush: { rScale: 1.0, sLo: 0.0, sHi: 6.0, bLo: 0.2, bHi: 6.0, fec: 0.5, dDisp: 0.45, dCV: 0.4, step: 0.06, taxis: 0.3, trophic: 0.05 },
+    P: {
+      costsOn: true, recomb: 'crossover', mutation: 'gaussian', sigma: 0.3, mu: 0.14, sigmaG: 0.06, macroRate: 0.05,
+      energyOn: true, fieldContrast: 0.8, fieldRegrow: 0.20, autoGain: 1.1, predRate: 0.6, predGain: 0.6, trophicExp: 2.0, upkeep: 0.02, geneCost: 0.03, birthCost: 2.0,
+      huntThreshold: 0.75, isolation: 0.3,
+    },
+    init: { layout: 'uniform', genomeInit: 'brush', population: 3500, spread: 0.05 },
+    color: 'trophic', gene: 'align', speed: Infinity,
+  },
 ];
 // A preset is a whole scenario: every rule and seeding setting starts from the
 // defaults, so the result never depends on what was run before. Only the seed, the
@@ -576,6 +603,8 @@ function applyPreset(i) {
   brushB = pr.brushB ? specInto(new Float32Array(G), Object.assign({ trophic: 0.5, align: 0 }, pr.brushB)) : null;
   Object.assign(init, INIT_DEFAULTS, { seed: init.seed, blobN: init.blobN, blobJitter: init.blobJitter }, pr.init);
   ui.colorMode = pr.color || 'lineage';
+  ui.speed = pr.speed || 1;
+  if (pr.gene) { selGene = GENE[pr.gene]; const dd = $('#bottom select'); if (dd) dd.value = String(selGene); }
   buildSide();
   applyInit();
   if (!ui.playing) togglePlay();
@@ -798,6 +827,10 @@ function syncPlayButtons() {
   const b = $('#playbtn'); if (b) b.textContent = ui.playing ? '❚❚ pause' : '▶ play';
   const c = $('#cornerplay'); c.textContent = ui.playing ? '❚❚' : '▶'; c.setAttribute('aria-label', ui.playing ? 'Pause' : 'Play');
 }
+function setSpeed(v) {
+  ui.speed = v;
+  for (const b of document.querySelectorAll('.seg.speed button')) b.classList.toggle('on', SPEEDS[+b.dataset.speed] === v);
+}
 function togglePlay() {
   ui.playing = !ui.playing;
   syncPlayButtons();
@@ -817,8 +850,13 @@ function toggleUI() {
 function singleStep() { step(state, P); pushHist(computeStats(state, P)); }
 
 let fpsT = 0, fpsN = 0, fps = 0;
+let ticksPerFrame = 0;
 function frame(t) {
-  if (ui.playing) step(state, P);
+  if (ui.playing) {
+    const t0 = performance.now(); let k = 0;
+    do { step(state, P); k++; } while (k < ui.speed && performance.now() - t0 < STEP_BUDGET_MS);
+    ticksPerFrame = k;
+  }
   renderFn(state, P, view, ui);
   const s = computeStats(state, P);
   if (ui.playing) pushHist(s);
@@ -826,7 +864,7 @@ function frame(t) {
   fpsN++; if (t - fpsT > 500) { fps = Math.round(fpsN * 1000 / (t - fpsT)); fpsN = 0; fpsT = t; }
   const troph = P.energyOn ? ` · plants <b>${s.plants}</b> · animals <b>${s.animals}</b> · e̅ <b>${s.meanEnergy.toFixed(1)}</b>` : '';
   $('#starthint').style.display = !ui.playing && state.tick === 0 ? 'block' : 'none';
-  $('#hud').innerHTML = `tick <b>${state.tick}</b> · pop <b>${state.count}</b> · lineages <b>${s.lineages}</b> · genera <b>${s.genera}</b>${troph} · ${fps} fps · ${rendererName}${ui.playing ? '' : ' · <b>paused</b>'}`;
+  $('#hud').innerHTML = `tick <b>${state.tick}</b> · pop <b>${state.count}</b> · lineages <b>${s.lineages}</b> · genera <b>${s.genera}</b>${troph} · ${fps} fps · ${rendererName}${ui.playing ? (ui.speed > 1 ? ` · <b>${ticksPerFrame}</b> ticks/frame` : '') : ' · <b>paused</b>'}`;
   requestAnimationFrame(frame);
 }
 
@@ -837,6 +875,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
   else if (e.key === '.') { e.preventDefault(); singleStep(); }
   else if (e.key === 'r' || e.key === 'R') applyInit();
+  else if (e.key === '[' || e.key === ']') { const k = SPEEDS.indexOf(ui.speed) + (e.key === ']' ? 1 : -1); setSpeed(SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, k))]); }
   else if (e.key === 'h' || e.key === 'H' || (e.key === 'Escape' && document.body.classList.contains('collapsed'))) toggleUI();
 });
 // Some browsers activate a focused button on Space keyup even when keydown was
