@@ -196,7 +196,7 @@ export function createState(cap) {
     // divergence registries (grow): species (fine) and genus (coarse) tiers
     spRef: [], spParent: [], spLineage: [], spGenus: [], spBig: [], nextSpecies: 0,
     gRef: [], gParent: [], gLineage: [], nextGenus: 0,
-    _spColor: [],   // renderer-owned color cache, keyed by species id; cleared on reset
+    _spColor: [], _spBins: [],   // renderer-owned caches keyed by species id (genealogy colour, species-hash bins); cleared on reset
     rng: makeRNG(1),
     _scratch: null, _rangesR: -1, _ranges: null,
   };
@@ -206,7 +206,7 @@ export function resetState(state, seed) {
   state.count = 0; state.tick = 0; state.nextLineage = 1;
   state.spRef = []; state.spParent = []; state.spLineage = []; state.spGenus = []; state.spBig = []; state.nextSpecies = 0;
   state.gRef = []; state.gParent = []; state.gLineage = []; state.nextGenus = 0;
-  state._spColor = [];
+  state._spColor = []; state._spBins = [];   // renderer caches (genealogy colours, species-hash bins)
   state._fieldW = -1; state._fieldH = -1; state._fieldSeed = -1;   // force the field to rebuild for the new run
   state.rng = makeRNG(seed >>> 0);
 }

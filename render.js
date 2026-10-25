@@ -74,19 +74,32 @@ export function trophicHSL(genome, base, en, emax) {
 // Species hash. A species' reference genome (which follows its members) is binned
 // coarsely, HASH_BINS per gene, and hashed. Each species thus gets an arbitrary but
 // stable identity that changes only when a split founds a new species or when drift
-// carries the reference across a bin. Colour mode 'hash' and the shapes read it.
-const HASH_BINS = 6;
+// carries the reference clearly into another bin. The bins have hysteresis: a gene only
+// moves to a new bin once the reference is HASH_MARGIN of a bin past the edge, so the
+// reference's tick-to-tick jitter near an edge can't make the colour and shape strobe.
+// Bins persist per species in state._spBins (cleared on reset). Colour mode 'hash' and
+// the shapes read it.
+const HASH_BINS = 6, HASH_MARGIN = 0.35;
 export function makeSpeciesHasher(state, R) {
   const ranges = geneRanges(R), memo = new Map();
+  if (!state._spBins) state._spBins = [];
   const hash = (sp) => {
     let h = memo.get(sp);
     if (h !== undefined) return h;
     const ref = state.spRef[sp];
+    let bins = state._spBins[sp];
     h = 2166136261;
-    if (ref) for (let g = 0; g < G; g++) {
-      let q = Math.floor((ref[g] - ranges[g][0]) / (ranges[g][1] - ranges[g][0]) * HASH_BINS);
-      if (q < 0) q = 0; else if (q >= HASH_BINS) q = HASH_BINS - 1;
-      h = Math.imul(h ^ (q + 16 * g), 16777619);
+    if (ref) {
+      if (!bins) bins = state._spBins[sp] = new Int8Array(G).fill(-1);
+      for (let g = 0; g < G; g++) {
+        const u = (ref[g] - ranges[g][0]) / (ranges[g][1] - ranges[g][0]) * HASH_BINS;
+        let q = bins[g];
+        if (q < 0 || u < q - HASH_MARGIN || u > q + 1 + HASH_MARGIN) {
+          q = Math.floor(u); if (q < 0) q = 0; else if (q >= HASH_BINS) q = HASH_BINS - 1;
+          bins[g] = q;
+        }
+        h = Math.imul(h ^ (q + 16 * g), 16777619);
+      }
     }
     h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12; h = Math.imul(h, 0x297a2d39); h ^= h >>> 15;
     h >>>= 0;
