@@ -24,6 +24,7 @@
     <div id="hud"></div>
     <div id="starthint"></div>
     <div id="corner">
+      <button id="helpbtn" aria-label="About Genomia">?</button>
       <button id="cornerplay" aria-label="Play">▶</button>
       <button id="uitoggle" aria-label="Hide controls">⤢</button>
     </div>
@@ -31,6 +32,36 @@
   </div>
   <div id="bottom"></div>
   <aside id="side"></aside>
+  <dialog id="welcome" aria-labelledby="wtitle">
+    <button id="welcomex" aria-label="Close">×</button>
+    <h1 id="wtitle" tabindex="-1" autofocus>Genomia</h1>
+    <p class="lede">A little world of evolving genomes.</p>
+    <p>Every shape is a cell with its own genome: 13 genes that set how far it senses, how much crowding it tolerates, when it breeds, how it moves, what it eats, whether it travels with its neighbours, and how big it is. Survivors breed, offspring inherit their parents’ genes with small mutations, and so the rules of life themselves evolve. Close relatives form a species; when part of a species drifts far enough, it founds a new one.</p>
+
+    <h2>The default scenario</h2>
+    <p>A fresh visit opens on <b>Trophic web</b>. Green cells are plants that graze the flora field; cells shading through blue to red are animals that hunt them. Brighter cells have more energy stored.</p>
+
+    <h2>Reading the cells</h2>
+    <ul>
+      <li><b>Shape and colour belong to the species.</b> Both come from a hash of the genome the species was founded with, so members of a species look alike and a cell’s look never changes during its life. New species bring new looks.</li>
+      <li><b>Triangles</b> are species with strong pack instinct, pointing the way they’re heading. Other species are squares, pentagons, hexagons or circles.</li>
+      <li><b>Size</b> is the body-size gene. Slight shade differences within a species show how far each cell has drifted from its founder.</li>
+      <li>The <b>color</b> menu (under Rendering) changes what colour shows: species, genome, family tree, or plant-to-animal diet. Trophic web starts on diet; most scenarios start on species.</li>
+    </ul>
+
+    <h2>Things to try</h2>
+    <ul>
+      <li class="fine"><b>Paint cells.</b> Click the habitat to place a cell, or drag to paint. Shift-click drops a blob; alt-drag erases.</li>
+      <li class="coarse"><b>Paint cells.</b> Tap the habitat to place a cell, or drag to paint.</li>
+      <li>New cells get the <b>Brush genome</b> in the controls. Change a gene and the next cells you paint start a new lineage.<span class="fine"> Hover any cell to read its genome; <b>copy hovered</b> loads it into the brush.</span></li>
+      <li><b>Presets</b> hold 12 scenarios: flocks, hunting packs, species blooms, evolutionary collapse and more.</li>
+      <li><b>Fast-forward</b> with the speed buttons. Evolution takes thousands of ticks.</li>
+      <li class="fine">Hover any control for a plain-language explanation. Each section’s badge says whether it changes every cell <i>live</i>, only <i>new cells</i>, takes effect <i>on reset</i>, or only the <i>view</i>.</li>
+      <li><b>copy link</b> shares the current setup, which replays the same run.</li>
+    </ul>
+    <p class="keys fine"><kbd>Space</kbd> play/pause · <kbd>.</kbd> step · <kbd>[</kbd> <kbd>]</kbd> speed · <kbd>R</kbd> reset · <kbd>H</kbd> hide controls · <kbd>?</kbd> this guide</p>
+    <div class="wfoot"><button id="welcomego" class="on">Start exploring</button><span>Reopen anytime with the <b>?</b> button.</span></div>
+  </dialog>
   <script type="module" src="main.js"></script>
 </body>
 </html>

@@ -875,6 +875,8 @@ function frame(t) {
 }
 
 window.addEventListener('keydown', (e) => {
+  if (welcome.open) return;   // the guide's own buttons take the keys (Esc closes it)
+  if (e.key === '?') { openWelcome(); return; }
   const t = e.target;
   // text fields and menus keep their keys; sliders don't need Space/R, so shortcuts still work after a drag
   if ((t.tagName === 'INPUT' && t.type !== 'range') || t.tagName === 'SELECT' || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -914,6 +916,19 @@ function setupTips() {
   });
 }
 
+// ---- first-visit guide ----------------------------------------------------
+// Shown once per browser (remembered in localStorage when available); the ? button
+// and key reopen it. The simulation keeps running behind it.
+const welcome = $('#welcome');
+const WELCOMED_KEY = 'genomia.welcomed';
+function openWelcome() { hideTip(); if (!welcome.open) welcome.showModal(); }
+welcome.addEventListener('close', () => { try { localStorage.setItem(WELCOMED_KEY, '1'); } catch (e) { /* private mode: show again next time */ } });
+welcome.addEventListener('click', (e) => { if (e.target === welcome) welcome.close(); });   // click on the backdrop
+$('#welcomego').addEventListener('click', () => welcome.close());
+$('#welcomex').addEventListener('click', () => welcome.close());
+$('#helpbtn').addEventListener('click', openWelcome);
+$('#helpbtn').setAttribute('data-tip', 'What is this, and how do I use it? (?)');
+
 // ---- boot -----------------------------------------------------------------
 setupTips();
 resize();
@@ -946,4 +961,8 @@ if (devHash.length > 0) {
   ui.playing = devHash.includes('play');
   syncPlayButtons();
 }
+// dev hashes are for screenshots and testing, so they skip the guide
+let welcomed = false;
+try { welcomed = localStorage.getItem(WELCOMED_KEY) === '1'; } catch (e) { /* storage blocked */ }
+if (!welcomed && devHash.length === 0) openWelcome();
 requestAnimationFrame(frame);
