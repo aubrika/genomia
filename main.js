@@ -5,7 +5,8 @@ import {
   geneRanges, DEFAULTS, MAXCAP, G, GENE, GENE_NAMES,
 } from './sim.js';
 import { seedPopulation } from './seed.js';
-import { draw, hslToRgb, speciesSides, SHAPE_NAMES, makeSpeciesHasher } from './render.js';
+import { draw, hslToRgb, speciesSides, SHAPE_NAMES, makeSpeciesHasher, drawSpeciesIcon } from './render.js';
+import { updatePeaks, topSpecies, speciesName } from './leaderboard.js';
 import { createGLRenderer } from './render_gl.js';
 
 // ---- state ----------------------------------------------------------------
@@ -164,6 +165,7 @@ const HELP = {
   sparkPop: 'Living cell count over time.',
   sparkGene: 'Mean ± standard deviation of the selected gene across the whole population.',
   sparkVar: 'Genetic variance index — mean per-gene variance, normalised by range. The headline number: it collapses under blend inheritance and holds steady under crossover.',
+  board: 'The ten species that reached the most living members at once since the last reset. A species here is a species hash: related species whose founding genomes hash alike share a shape, colour and name, so they count together. Each row shows that shape, its colour in the current colour mode, and a made-up name picked from the hash. peak = the most members alive together; now = how many are alive now († = extinct). Hover a row for details.',
   sparkSpecies: 'Number of distinct surviving species (the fine tier). Rises as genomes diverge past the species threshold and falls as species go extinct. Founder-lineage and genus counts are in the top-left readout.',
   sparkShare: 'Population share of the founder lineages over time, as a stacked band. Watch one lineage competitively exclude the others (a band swallowing the rest) or a stable coexistence hold. Grey = any later-founded lineages lumped together.',
 };
@@ -234,6 +236,21 @@ function buildSide() {
     ctrlSelect('scenario', presetOpts, curPreset >= 0 ? String(curPreset) : '', (v) => { if (v !== '') applyPreset(+v); }),
     el('p', { class: 'hint' }, [curPreset >= 0 ? PRESET_BLURBS[curPreset] : 'A starting scenario.']),
   ]));
+
+  // Leaderboard — rows are built once here and refilled by updateBoard()
+  boardRows = [];
+  const board = el('div', { class: 'board' }, [el('div', { class: 'brow bhead' }, [el('span', {}, ['#']), el('span'), el('span', {}, ['species']), el('span', {}, ['peak']), el('span', {}, ['now'])])]);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  for (let k = 0; k < BOARD_N; k++) {
+    const icon = el('canvas'); icon.width = icon.height = Math.round(BOARD_ICON * dpr);
+    const row = el('div', { class: 'brow' }, [el('span', { class: 'rank' }, [String(k + 1)]), icon, el('span', { class: 'bname' }), el('span', { class: 'bnum' }), el('span', { class: 'bnum' })]);
+    row.style.display = 'none';
+    board.append(row);
+    boardRows.push(row);
+  }
+  boardEmpty = el('p', { class: 'hint' }, ['No species yet.']);
+  side.append(withTip(section('Leaderboard', [board, boardEmpty]), HELP.board));
+  boardAt = 0;
 
   // Rules
   const ageBtn = button('max-age death', () => { P.maxAgeOn = !P.maxAgeOn; ageBtn.classList.toggle('on', P.maxAgeOn); }, P.maxAgeOn ? 'on' : '', HELP.maxAgeToggle);
@@ -340,6 +357,36 @@ function buildSide() {
     'Genomia — a little world of evolving genomes. ',
     el('a', { href: 'https://github.com/aubrika/genomia', target: '_blank', rel: 'noopener' }, ['Source & notes on GitHub']), '.',
   ]));
+}
+
+// ---- leaderboard -----------------------------------------------------------
+const BOARD_N = 10, BOARD_ICON = 26, BOARD_EVERY_MS = 500;
+let boardRows = [], boardEmpty = null, boardAt = 0;
+function updateBoard(now) {
+  if (now - boardAt < BOARD_EVERY_MS) return;
+  boardAt = now;
+  const hash = makeSpeciesHasher(state, P.R), top = topSpecies(state, BOARD_N, hash), seen = new Map();
+  boardEmpty.style.display = top.length ? 'none' : '';
+  boardRows.forEach((row, k) => {
+    const t = top[k];
+    if (!t) { row.style.display = 'none'; return; }
+    row.style.display = '';
+    const [, icon, nameEl, peakEl, nowEl] = row.children;
+    drawSpeciesIcon(icon.getContext('2d'), state, t.sp, ui.colorMode, P.R, hash, ui.shapes);
+    // two different hashes can draw the same name; number the repeats
+    let name = speciesName(t.hash);
+    const n = (seen.get(name) || 0) + 1; seen.set(name, n);
+    if (n > 1) name += ' ' + ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'][n];
+    nameEl.textContent = name;
+    peakEl.textContent = String(t.peak);
+    nowEl.textContent = t.now ? String(t.now) : '†';
+    nowEl.classList.toggle('extinct', !t.now);
+    const sides = ui.shapes ? speciesSides(state, t.sp, hash) : 0;
+    row.setAttribute('data-tip', `${name}\nfirst seen as species ${t.sp} · genus ${state.spGenus[t.sp]} · lineage ${state.spLineage[t.sp]}\n` +
+      `peaked at ${t.peak} living members on tick ${t.tick}\n` +
+      `${t.now ? `${t.now} alive now${t.species > 1 ? `, across ${t.species} related species that share this look` : ''}` : 'extinct'}\n` +
+      `${SHAPE_NAMES[sides]}${sides === 3 ? ' (pack instinct)' : ''}`);
+  });
 }
 
 // The seeding-population slider can't exceed the population limit; keep its max (and
@@ -752,7 +799,7 @@ function updateTooltip(e) {
   const rows = GENE_LABELS.map((n, g) => `<span class="k">${n}</span> ${g === GENE.fecundity ? state.genome[base + g].toFixed(3) : f2(state.genome[base + g])}`);
   const en = P.energyOn ? ` · <span class="k">e</span> ${state.energy[ui.hovered].toFixed(1)}` : '';
   const sp = state.species[ui.hovered];
-  tip.innerHTML = `<b>#${ui.hovered}</b> · lin ${state.lineage[ui.hovered]} · genus ${state.spGenus[sp]} · sp ${sp} · ${SHAPE_NAMES[speciesSides(state, sp, makeSpeciesHasher(state, P.R))]} · age ${state.age[ui.hovered] | 0}${en}<br>` + rows.join('<br>');
+  tip.innerHTML = `<b>${speciesName(makeSpeciesHasher(state, P.R)(sp))}</b><br>#${ui.hovered} · lin ${state.lineage[ui.hovered]} · genus ${state.spGenus[sp]} · sp ${sp} · ${SHAPE_NAMES[speciesSides(state, sp, makeSpeciesHasher(state, P.R))]} · age ${state.age[ui.hovered] | 0}${en}<br>` + rows.join('<br>');
   tip.style.display = 'block';
   const r = canvas.getBoundingClientRect();
   let x = e.clientX - r.left + 14, y = e.clientY - r.top + 14;
@@ -853,20 +900,23 @@ function toggleUI() {
   hideTip();   // the layout moved under the cursor; don't leave a stale tip behind
   resize();
 }
-function singleStep() { step(state, P); pushHist(computeStats(state, P)); }
+function singleStep() { step(state, P); updatePeaks(state, makeSpeciesHasher(state, P.R)); pushHist(computeStats(state, P)); }
 
 let fpsT = 0, fpsN = 0, fps = 0;
 let ticksPerFrame = 0;
 function frame(t) {
+  const hasher = makeSpeciesHasher(state, P.R);
+  updatePeaks(state, hasher);   // counts seeded and painted cells too, not just births
   if (ui.playing) {
     const t0 = performance.now(); let k = 0;
-    do { step(state, P); k++; } while (k < ui.speed && performance.now() - t0 < STEP_BUDGET_MS);
+    do { step(state, P); updatePeaks(state, hasher); k++; } while (k < ui.speed && performance.now() - t0 < STEP_BUDGET_MS);
     ticksPerFrame = k;
   }
   renderFn(state, P, view, ui);
   const s = computeStats(state, P);
   if (ui.playing) pushHist(s);
   drawSparks(s);
+  updateBoard(t);
   fpsN++; if (t - fpsT > 500) { fps = Math.round(fpsN * 1000 / (t - fpsT)); fpsN = 0; fpsT = t; }
   const troph = P.energyOn ? ` · plants <b>${s.plants}</b> · animals <b>${s.animals}</b> · e̅ <b>${s.meanEnergy.toFixed(1)}</b>` : '';
   $('#starthint').style.display = !ui.playing && state.tick === 0 ? 'block' : 'none';
@@ -954,7 +1004,7 @@ if (devHash.includes('phenotype')) ui.colorMode = 'phenotype';  // #phenotype �
 if (devHash.includes('trophic')) ui.colorMode = 'trophic';    // #trophic — dev/testing
 if (devHash.includes('nolines')) ui.showLines = false;        // #nolines — cheap headless screenshots
 const runM = devHash.match(/run=?(\d+)/);        // #run400 — pre-step headlessly (dev/testing)
-if (runM) { const k = +runM[1]; for (let i = 0; i < k; i++) step(state, P); pushHist(computeStats(state, P)); }
+if (runM) { const k = +runM[1], hz = makeSpeciesHasher(state, P.R); for (let i = 0; i < k; i++) { step(state, P); updatePeaks(state, hz); } pushHist(computeStats(state, P)); }
 // with a dev hash, playing state is explicit ('play' => run, else a paused snapshot);
 // this also overrides a preset's autoplay so screenshots don't keep stepping.
 if (devHash.length > 0) {
