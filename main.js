@@ -1,10 +1,11 @@
 // Glue: UI, canvas, interaction, loop, instrumentation. All simulation logic
 // lives in sim.js (DOM-free); this file is the instrument panel around it.
 import {
-  createState, resetState, addAgent, step, computeStats, foundClade, buildField,
+  createState, resetState, addAgent, step, computeStats, foundClade, buildField, createOccupancy, bodyRadius,
   geneRanges, DEFAULTS, MAXCAP, G, GENE, GENE_NAMES,
 } from './sim.js';
-import { draw, hslToRgb } from './render.js';
+import { seedPopulation } from './seed.js';
+import { draw, hslToRgb, speciesSides, SHAPE_NAMES } from './render.js';
 import { createGLRenderer } from './render_gl.js';
 
 // ---- state ----------------------------------------------------------------
@@ -16,7 +17,7 @@ let fieldNonce = Date.now() >>> 0;
 const freshFieldSeed = () => { fieldNonce = (fieldNonce + 0x9e3779b1) >>> 0; return fieldNonce; };
 let pinnedFieldSeed = null;   // set by a shared link: the next reset reuses that flora pattern instead
 const view = { scale: 1, ox: 0, oy: 0 };
-const ui = { playing: false, colorMode: 'lineage', showLines: true, lineCap: 20000, hovered: -1 };
+const ui = { playing: false, colorMode: 'lineage', showLines: true, shapes: true, lineCap: 20000, hovered: -1 };
 const INIT_DEFAULTS = { population: 10000, layout: 'uniform', k: 6, genomeInit: 'tworand', spread: 0.03, blobN: 60, blobJitter: 26, seed: 12345 };
 const init = Object.assign({}, INIT_DEFAULTS);
 let selGene = GENE.step;
@@ -84,16 +85,16 @@ const f2 = (v) => (Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
 const HELP = {
   // Gene tooltips: a plain-language reading first, then the exact mechanics. The
   // first line names the friendly label with its code name, which is what sim.js uses.
-  rScale: 'Reach (rScale)\n\nHow far this cell can sense its neighbours. Everything it reacts to (crowding, steering, choosing a mate, and, for predators, who it can eat) happens within this distance. A longer reach averages over more neighbours, so it reads crowding more reliably, but it costs more.\n\nHow it works: sensing radius r = R × reach, where R is the world’s base interaction radius. A neighbour at distance d inside r adds (1 − d²/r²)², so near neighbours count fully and distant ones barely. That sum is divided by reach², which makes crowding a density: the same neighbourhood reads the same crowding whatever the reach. Range 0.5–1.5. Costs kSense × reach².',
+  rScale: 'Reach (rScale)\n\nHow far this cell can sense its neighbours. Everything it reacts to (crowding, steering, choosing a mate, and, for predators, who it can eat) happens within this distance. A longer reach averages over more neighbours, so it reads crowding more reliably, but it costs more.\n\nHow it works: sensing radius r = R × reach, where R is the world’s base interaction radius. A neighbour at distance d inside r adds (1 − d²/r²)², so near neighbours count fully and distant ones barely. That sum is divided by reach², which makes crowding a density: the same neighbourhood reads the same crowding whatever the reach. Range 0.5–1.5. Costs kSense × reach². Also sets body size: long reach = a bigger body (with low fertility).',
   sLo: 'Loneliness limit (sLo)\n\nThe least company this cell can live with. If its neighbourhood thins out below this, it dies of loneliness (the Allee effect). Raise it and isolated cells and advancing edges die back.\n\nHow it works: the lower bound of the survival window. Each tick, survival chance = smoothstep up across [limit − σ, limit + σ] × smoothstep down across the crowding limit, where σ is the softness rule. With metabolic cost on, a wide window also carries a standing death risk (see generalist death). Measured in crowding units (weighted neighbours per base-reach area); range 0–6.',
   sHi: 'Crowding limit (sHi)\n\nThe most crowding this cell can bear. Pack its neighbourhood tighter than this and it dies of overcrowding. Lower it and cells can only persist in thin, sparse structures.\n\nHow it works: the upper bound of the survival window [loneliness limit, crowding limit], with a soft edge of ±σ. If it ends up below the loneliness limit, the two are swapped. Range 0–6. A wider window costs kTol in fertility and, with metabolic cost on, raises the per-tick death chance by generalist death × width/6.',
   bLo: 'Breeding company (bLo)\n\nHow much company this cell needs before it will breed. Below this, it can still survive but won’t reproduce.\n\nHow it works: the lower bound of the breeding window [breeding company, nursery limit], with a soft edge of ±σ. Only cells that survive the tick can breed. Each tick, birth chance = fertility × window × cost factor. Range 0–6. A wider window costs kTol.',
   bHi: 'Nursery limit (bHi)\n\nThe most crowding at which this cell will still breed. Above this, it stops reproducing even if it survives.\n\nHow it works: the upper bound of the breeding window [breeding company, nursery limit], with a soft edge of ±σ. If it ends up below breeding company, the two are swapped. Range 0–6. A wider window costs kTol.',
-  fecundity: 'Fertility (fecundity)\n\nHow eagerly this cell reproduces when conditions suit it.\n\nHow it works: the base chance per tick of producing one offspring while inside the breeding window. With metabolic cost on, it is multiplied by e^(−cost), where cost = kMove·(restlessness/R)² + kSense·reach² + kTol·(window widths)/12 + kTaxis·sociability². With the energy model on, cost is paid in energy instead, and the cell must also have banked 1.4 × breed cost. Range 0–0.30.',
+  fecundity: 'Fertility (fecundity)\n\nHow eagerly this cell reproduces when conditions suit it.\n\nHow it works: the base chance per tick of producing one offspring while inside the breeding window. With metabolic cost on, it is multiplied by e^(−cost), where cost = kMove·(restlessness/R)² + kSense·reach² + kTol·(window widths)/12 + kTaxis·sociability². With the energy model on, cost is paid in energy instead, and the cell must also have banked 1.4 × breed cost. Range 0–0.30. Also sets body size: low fertility = a bigger body (with long reach).',
   dDisp: 'Seed throw (dDisp)\n\nHow far from the parent its offspring land. Short throws reinforce the local cluster; long throws colonise gaps and new ground.\n\nHow it works: offspring are placed in a random direction at distance |throw × (1 + scatter × N(0,1))|, where N is a standard normal draw. Range 0.2R–3R, in world units. It scales with R, so it stays proportional when the window resizes.',
   dCV: 'Throw scatter (dCV)\n\nHow consistent the seed throw is. At 0, every offspring lands at exactly the throw distance; higher values spread them anywhere from close by to far away.\n\nHow it works: the coefficient of variation of the throw distance. Distance = |throw × (1 + scatter × N(0,1))|. Range 0–1.',
   step: 'Restlessness (step)\n\nHow far this cell moves each tick. Sessile cells hold their ground; restless ones roam and mix.\n\nHow it works: each tick the cell moves exactly this distance, in a direction mixed from a random heading and its sociability steering. Range 0–0.3R, in world units, scaled with R. Costs kMove × (restlessness/R)².',
-  taxis: 'Sociability (taxis)\n\nWhether this cell drifts toward company or away from it. +1 = seeks crowds (aggregates into clumps), −1 = shuns them (spreads out), 0 = wanders at random.\n\nHow it works: direction = (1 − |s|) × random heading + s × ĝ, normalised, where ĝ points up the local crowding gradient (toward denser neighbours, within reach). Range −1 to +1. Costs kTaxis × sociability².',
+  taxis: 'Sociability (taxis)\n\nWhether this cell drifts toward company or away from it. +1 = seeks crowds (aggregates into clumps), −1 = shuns them (spreads out), 0 = wanders at random.\n\nHow it works: direction = (1 − |s|) × random heading + s × ĝ, normalised, where ĝ points up the local crowding gradient (toward denser neighbours, within reach). Range −1 to +1. Costs kTaxis × sociability². Its species’ average sociability sets the drawn shape: triangle (shuns) → square → pentagon → hexagon → circle (seeks).',
   trophic: 'Diet (trophic)\n\nWhat this cell eats when the energy model is on. 0 = pure “plant”: grazes the resource field. 1 = pure “animal”: preys on neighbouring cells. Has no effect while the energy model is off.\n\nHow it works: grazing efficiency = (1 − diet)^p and hunting efficiency = diet^p, where p is the specialization rule. When p > 1, generalists are worse at both, so selection pushes lineages to the extremes. A hunter drains predation × its efficiency × closeness × (1 − the prey’s hunting efficiency) from each neighbour in reach per tick, and keeps a predGain share of it. Cells with diet ≥ 0.5 count as animals. Range 0–1.',
   sigma: 'Band-edge softness. Birth/death thresholds are fuzzy, not hard: σ is the half-width of the smooth transition around each bound. Small σ ≈ crisp, Conway-like rules; large σ = gradual.',
   maxAgeToggle: 'When on, cells also die of old age once they pass "max age". Off by default — death is otherwise purely density-driven.',
@@ -125,6 +126,8 @@ const HELP = {
   upkeep: 'Base metabolic energy drained every tick, regardless of genome. Higher = cells starve sooner and must feed more actively.',
   geneCost: 'Extra upkeep charged per unit of genome complexity (long reach, high restlessness, wide survival/breeding windows, strong sociability). This is the "greater features cost more food" term — elaborate cells must out-feed simple ones to survive.',
   birthCost: 'Energy a parent invests into each offspring (the child starts life with it). A cell must bank ~1.4× this to breed, so reproduction is a real energy decision, not free.',
+  shapes: 'Cell shapes. Each cell is drawn at its body size (bigger for long reach and low fertility). Its polygon is set by its SPECIES’ sociability: triangle = shuns crowds, then square, pentagon, hexagon, up to circle = seeks crowds. Rotation is individual. OFF draws every cell as a circle (still at body size).',
+  bodies: 'Solid bodies. When ON, every cell occupies its drawn body: an offspring can’t land on another cell (it tries a few directions, else the birth fails), and a move that would overlap another cell is skipped that tick. Bigger bodies therefore claim more room. OFF = the old point-particle physics, where cells can pile up anywhere.',
   lines: 'Draw a link between cells that perceive each other. Solid = mutual perception, dashed = one-way (a real consequence of different rScale). Line opacity follows perception strength, so links fade in and out as cells drift.',
   seed: 'Random seed. The same seed plus the same parameters reproduces a run exactly — in the same window size, since the habitat scales with the window. (The resource field is re-randomized on every reset, so trophic runs vary each time; a shared link pins it.)',
   share: 'Copy a link that re-creates this run from tick 0 with the current settings: seed, rules, brush, initializer, colour mode and flora pattern. Best reproduced in a similar window size.',
@@ -159,10 +162,10 @@ const PRESET_BLURBS = [
   'Tight Life-like rules on a lattice: a near-total crash, then surviving colonies spread back.',
   'Costs off: survival and breeding windows open all the way, and every lineage turns the same grey.',
   'Blend inheritance averages parents: genetic variance drops ~85% in 100 ticks. Try crossover to compare.',
-  'Strongly sociable cells under a low population limit condense into a few colonies that merge.',
+  'Strongly sociable cells under a low population limit condense into a handful of colonies that merge.',
   'One colony with a high loneliness limit: strays die, so it grows only at its edge, as a steady front.',
   'Sociable cells with a low crowding limit: packed interiors die, leaving colonies full of holes.',
-  'Fast mutation, local breeding and choosy mates: one founder splits into a dozen-plus large species.',
+  'Fast mutation, local breeding and choosy mates: one founder splits into around ten large species.',
   'Energy model on: plants graze the flora, animals evolve to hunt them.',
 ];
 
@@ -207,6 +210,7 @@ function buildSide() {
 
   // Rules
   const ageBtn = button('max-age death', () => { P.maxAgeOn = !P.maxAgeOn; ageBtn.classList.toggle('on', P.maxAgeOn); }, P.maxAgeOn ? 'on' : '', HELP.maxAgeToggle);
+  const bodiesBtn = button('bodies', () => { P.bodiesOn = !P.bodiesOn; bodiesBtn.classList.toggle('on', P.bodiesOn); }, P.bodiesOn ? 'on' : '', HELP.bodies);
   const capBtn = button('unlimited', () => { P.capOff = !P.capOff; capBtn.classList.toggle('on', P.capOff); syncPopMax(); }, P.capOff ? 'on' : '', HELP.capOff);
   const kfmt = (v) => (v >= 1000 ? (v / 1000) + 'k' : String(v));
   side.append(section('Rules', [
@@ -214,7 +218,7 @@ function buildSide() {
     el('div', { class: 'row' }, [ageBtn]),
     slider('max age', 50, 2000, 10, () => P.maxAge, (v) => P.maxAge = v, (v) => v.toFixed(0), HELP.maxAge),
     slider('max pop', 1000, MAXCAP, 1000, () => P.cap, (v) => { P.cap = v; syncPopMax(); }, kfmt, HELP.maxPop),
-    el('div', { class: 'row' }, [capBtn]),
+    el('div', { class: 'row' }, [capBtn, bodiesBtn]),
   ], 'live'));
 
   // Costs
@@ -264,9 +268,12 @@ function buildSide() {
   const linesBtn = button(ui.showLines ? 'lines ON' : 'lines OFF', () => {
     ui.showLines = !ui.showLines; linesBtn.textContent = ui.showLines ? 'lines ON' : 'lines OFF'; linesBtn.classList.toggle('on', ui.showLines);
   }, ui.showLines ? 'on' : '', HELP.lines);
+  const shapesBtn = button(ui.shapes ? 'shapes ON' : 'shapes OFF', () => {
+    ui.shapes = !ui.shapes; shapesBtn.textContent = ui.shapes ? 'shapes ON' : 'shapes OFF'; shapesBtn.classList.toggle('on', ui.shapes);
+  }, ui.shapes ? 'on' : '', HELP.shapes);
   side.append(section('Rendering', [
     ctrlSelect('color', [['phenotype', 'phenotype'], ['lineage', 'genealogy'], ['trophic', 'trophic']], ui.colorMode, (v) => ui.colorMode = v, HELP.color),
-    el('div', { class: 'row' }, [linesBtn]),
+    el('div', { class: 'row' }, [linesBtn, shapesBtn]),
   ], 'view'));
 
   // Brush genome
@@ -423,69 +430,11 @@ function applyInit() {
   state.energy0 = P.energyMax * 0.5;
   P.fieldSeed = pinnedFieldSeed != null ? pinnedFieldSeed : freshFieldSeed();   // a new flora pattern each reset
   pinnedFieldSeed = null;
-  const rr = geneR(), Wx = P.worldW, Wy = P.worldH, Dm = Math.min(Wx, Wy), n = init.population, rng = state.rng;
-  const wx_ = (v) => ((v % Wx) + Wx) % Wx, wy_ = (v) => ((v % Wy) + Wy) % Wy;
-  const place = (x, y, g, lin, sp) => addAgent(state, wx_(x), wy_(y), g, lin, rr, sp);
-  brushDirty = true; curSpecies = -1;   // a fresh run; interactive placement founds anew
-
-  // small per-gene jitter around a template — a monoclonal seed boom-busts in
-  // lockstep, so a touch of variation gives selection something to act on.
-  const jitter = (g) => { const sp = init.spread; if (sp > 0) for (let j = 0; j < G; j++) g[j] += rng.gauss() * sp * (rr[j][1] - rr[j][0]); return g; };
-
-  if (init.genomeInit === 'twoclone' || init.genomeInit === 'tworand') {
-    // two founder lineages A and B, each its own species, placed apart to compete
-    let A, B;
-    if (init.genomeInit === 'tworand') {
-      // each lineage independently randomized around the viable brush — so every seed
-      // is a fresh natural-selection contest between two distinct genomes
-      const wild = () => { const g = new Float32Array(brush); for (let j = 0; j < G; j++) g[j] += rng.gauss() * 0.08 * (rr[j][1] - rr[j][0]); return g; };
-      A = wild(); B = wild();
-    } else {
-      A = new Float32Array(brush); B = new Float32Array(brush);
-      B[GENE.sLo] += 1.6; B[GENE.sHi] += 1.6; B[GENE.bLo] += 1.6; B[GENE.bHi] += 1.6;
-      B[GENE.step] = Math.min(rr[GENE.step][1], B[GENE.step] * 1.8);
-    }
-    const linA = state.nextLineage++, spA = foundClade(state, A, 0, linA);
-    const linB = state.nextLineage++, spB = foundClade(state, B, 0, linB);
-    curLineage = linA; curSpecies = spA; brushDirty = false;
-    // A fills the left half of the world, B the right — a territorial contest with a
-    // front where they meet. Uniform (not blobbed) so density starts viable everywhere.
-    const half = n >> 1;
-    for (let i = 0; i < n; i++) {
-      const isA = i < half;
-      const x = isA ? rng.next() * 0.5 * Wx : (0.5 + rng.next() * 0.5) * Wx, y = rng.next() * Wy;
-      place(x, y, jitter(new Float32Array(isA ? A : B)), isA ? linA : linB, isA ? spA : spB);
-    }
-  } else {
-    const centers = [];
-    if (init.layout === 'kblobs') for (let i = 0; i < init.k; i++) centers.push([rng.next() * Wx, rng.next() * Wy]);
-    const isUniform = init.genomeInit === 'uniform';
-    // 'clone brush' seeds ONE founder lineage/species (same rules => one lineage);
-    // 'uniform random' gives each cell its own founder (all different rules).
-    let lin = null, sp = null;
-    if (!isUniform) { lin = state.nextLineage++; sp = foundClade(state, brush, 0, lin); curLineage = lin; curSpecies = sp; brushDirty = false; }
-    const genomeOf = () => {
-      if (isUniform) { const g = new Float32Array(G); for (let j = 0; j < G; j++) g[j] = rng.range(rr[j][0], rr[j][1]); return g; }
-      return jitter(new Float32Array(brush));
-    };
-    if (init.layout === 'lattice') {
-      // jittered grid — low spatial variance, so a narrow-band (Conway-ish) genome
-      // starts mostly in its survival window instead of in the density tails.
-      // Spacing derives from population, so density is window-independent.
-      const a = Math.sqrt((Wx * Wy) / Math.max(1, n)), jit = 0.1 * a; let placed = 0;
-      for (let gy = a / 2; gy < Wy && placed < n; gy += a)
-        for (let gx = a / 2; gx < Wx && placed < n; gx += a) { place(gx + rng.gauss() * jit, gy + rng.gauss() * jit, genomeOf(), lin, sp); placed++; }
-    } else {
-      for (let i = 0; i < n; i++) {
-        let x, y;
-        if (init.layout === 'uniform') { x = rng.next() * Wx; y = rng.next() * Wy; }
-        else if (init.layout === 'blob') { x = Wx / 2 + rng.gauss() * Dm * 0.14; y = Wy / 2 + rng.gauss() * Dm * 0.14; }
-        else if (init.layout === 'kblobs') { const c = centers[(rng.next() * centers.length) | 0]; x = c[0] + rng.gauss() * Dm * 0.05; y = c[1] + rng.gauss() * Dm * 0.05; }
-        else { const a = rng.next() * 6.283185307179586; x = Wx / 2 + Math.cos(a) * Dm * 0.38; y = Wy / 2 + Math.sin(a) * Dm * 0.38; }
-        place(x, y, genomeOf(), lin, sp);
-      }
-    }
-  }
+  const founder = seedPopulation(state, P, init, brush);
+  // the brush belongs to the seeded founder (if any), so painting with it unchanged
+  // extends that lineage; otherwise the next placement founds anew
+  if (founder) { curLineage = founder.lineage; curSpecies = founder.species; brushDirty = false; }
+  else { brushDirty = true; curSpecies = -1; }
   if (P.energyOn) buildField(state, P);
   captureTracked();
   for (const k in hist) hist[k].length = 0;
@@ -507,7 +456,7 @@ function captureTracked() {
 // seeds and window sizes; the comment says what it reliably shows.
 const PRESETS = [
   { // Conway-ish — tight Life-like bands from a dense lattice. The synchronous start
-    // overshoots: ~90% die within ~200 ticks, then the surviving colonies spread back
+    // overshoots: ~95% die within ~300 ticks, then the surviving colonies spread back
     // over ~1000 ticks. Low mutation keeps the rules Life-like while they do.
     brush: { rScale: 1.0, sLo: 0.7, sHi: 3.4, bLo: 1.45, bHi: 2.5, fec: 0.22, dDisp: 0.72, dCV: 0.3, step: 0.035, taxis: -0.15 },
     P: { mu: 0.02, sigma: 0.6 },
@@ -530,10 +479,10 @@ const PRESETS = [
     color: 'phenotype',
   },
   { // Aggregation — strong sociability under a low population limit. The scattered
-    // population thins, then regrows as a few dense colonies that drift and merge until
-    // one to three remain.
+    // population thins, then regrows as dense colonies that drift and merge; by ~2000
+    // ticks usually 1–4 remain (sometimes up to ~8, still merging).
     brush: { rScale: 1.0, sLo: 0.22, sHi: 6.0, bLo: 0.4, bHi: 2.93, fec: 0.27, dDisp: 0.5, dCV: 0.3, step: 0.29, taxis: 0.67 },
-    P: { mu: 0.05, cap: 5000 },
+    P: { mu: 0.05, cap: 4000 },
     init: { layout: 'uniform', genomeInit: 'brush', population: 3500 },
   },
   { // Allee frontier — one colony with a high loneliness limit: cells that stray from
@@ -551,8 +500,8 @@ const PRESETS = [
   },
   { // Species bloom — one founder under fast mutation, with short dispersal (local
     // neighbourhoods) and reproductive isolation (mates must be genetically close), so
-    // diverging groups stop interbreeding. By ~800 ticks it holds a dozen-plus large
-    // species (200+ cells) and hundreds of small ones; the largest falls to ~20%.
+    // diverging groups stop interbreeding. By ~1500 ticks it holds around ten large
+    // species (200+ cells; 7–14 across seeds) and many small ones.
     brush: { rScale: 1.0, sLo: 0.6, sHi: 4.0, bLo: 1.0, bHi: 2.6, fec: 0.24, dDisp: 0.6, dCV: 0.3, step: 0.03, taxis: 0.10 },
     P: { mu: 0.2, sigmaG: 0.06, macroRate: 0.03, isolation: 0.1, speciesThreshold: 0.2, genusThreshold: 0.4 },
     init: { layout: 'uniform', genomeInit: 'brush', population: 4000, spread: 0.02 },
@@ -674,16 +623,21 @@ function eraseAt(wx, wy) {
     } else i++;
   }
 }
+// Hand placement respects bodies too: a spot overlapping another cell is skipped.
 function paintOne(x, y) {
+  if (!createOccupancy(state, P).fits(x, y, bodyRadius(brush, 0, P.R))) return;
   const f = brushFounder();
   addAgent(state, x, y, new Float32Array(brush), f.lineage, geneR(), f.species);
 }
 function placeBlob(wx, wy) {
   const rr = geneR(), Wx = P.worldW, Wy = P.worldH, rng = state.rng, f = brushFounder();
   const wx_ = (v) => ((v % Wx) + Wx) % Wx, wy_ = (v) => ((v % Wy) + Wy) % Wy;
+  const occ = createOccupancy(state, P), r = bodyRadius(brush, 0, P.R);
   for (let i = 0; i < init.blobN; i++) {
     const ang = rng.next() * 6.283185307179586, rad = Math.abs(rng.gauss()) * init.blobJitter;
-    addAgent(state, wx_(wx + Math.cos(ang) * rad), wy_(wy + Math.sin(ang) * rad), new Float32Array(brush), f.lineage, rr, f.species);
+    const x = wx_(wx + Math.cos(ang) * rad), y = wy_(wy + Math.sin(ang) * rad);
+    if (!occ.fits(x, y, r)) continue;
+    if (addAgent(state, x, y, new Float32Array(brush), f.lineage, rr, f.species) >= 0) occ.add(x, y, r);
   }
 }
 
@@ -717,7 +671,7 @@ function updateTooltip(e) {
   const rows = GENE_LABELS.map((n, g) => `<span class="k">${n}</span> ${g === GENE.fecundity ? state.genome[base + g].toFixed(3) : f2(state.genome[base + g])}`);
   const en = P.energyOn ? ` · <span class="k">e</span> ${state.energy[ui.hovered].toFixed(1)}` : '';
   const sp = state.species[ui.hovered];
-  tip.innerHTML = `<b>#${ui.hovered}</b> · lin ${state.lineage[ui.hovered]} · genus ${state.spGenus[sp]} · sp ${sp} · age ${state.age[ui.hovered] | 0}${en}<br>` + rows.join('<br>');
+  tip.innerHTML = `<b>#${ui.hovered}</b> · lin ${state.lineage[ui.hovered]} · genus ${state.spGenus[sp]} · sp ${sp} · ${SHAPE_NAMES[speciesSides(state, sp)]} · age ${state.age[ui.hovered] | 0}${en}<br>` + rows.join('<br>');
   tip.style.display = 'block';
   const r = canvas.getBoundingClientRect();
   let x = e.clientX - r.left + 14, y = e.clientY - r.top + 14;
@@ -741,7 +695,7 @@ function encodeConfig() {
     v: 1, seed: init.seed, fs: P.fieldSeed >>> 0, p,
     init: Object.fromEntries(Object.entries(init).map(([k, v]) => [k, short(v)])),
     b: Array.from(brush, (v, g) => short(R_RELATIVE(g) ? v / P.R : v)),
-    c: ui.colorMode, l: ui.showLines ? 1 : 0, pr: curPreset,
+    c: ui.colorMode, l: ui.showLines ? 1 : 0, sh: ui.shapes ? 1 : 0, pr: curPreset,
   };
   return btoa(JSON.stringify(cfg)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
@@ -761,6 +715,7 @@ function applyConfig(str) {
   }
   if (['phenotype', 'lineage', 'trophic'].includes(cfg.c)) ui.colorMode = cfg.c;
   if (cfg.l === 0 || cfg.l === 1) ui.showLines = !!cfg.l;
+  if (cfg.sh === 0 || cfg.sh === 1) ui.shapes = !!cfg.sh;
   if (Number.isInteger(cfg.pr) && cfg.pr >= -1 && cfg.pr < PRESETS.length) curPreset = cfg.pr;
   return true;
 }
